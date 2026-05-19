@@ -12,11 +12,14 @@ dist/
 # Poetry
 # poetry.lock  # 팀 내 협의 후 결정
 
-# 데이터 / 학습된 모델 파일 (루트 디렉토리만)
-/data/
-/models/
+# 데이터 / 학습된 모델 파일
+/data/*
+!/data/raw/
+/data/training_sets/
+/data/cache/
+/models/*
+!/models/*.pkl
 *.parquet
-*.pkl
 *.joblib
 
 # Jupyter
@@ -34,3 +37,8 @@ Thumbs.db
 frontend/node_modules/
 frontend/.next/
 frontend/.env.local
+
+guide/
+claude.md
+.claude/
+logs/

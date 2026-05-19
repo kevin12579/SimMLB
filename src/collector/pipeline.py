@@ -96,18 +96,32 @@ def sync_lineups_task() -> None:
 def run_inference_pipeline() -> None:
     """19:30 KST — ML 추론 + LLM 근거 생성 → DB 저장"""
     async def _inner() -> None:
-        from src.ml.prediction_service import run_daily_predictions
+        from scripts.run_inference_v2 import run
         today = date.today()
-        with get_session() as session:
-            count = await run_daily_predictions(today, session)
-        _notify_discord(f"✅ 19:30 추론 완료 — {today} 경기 {count}개 예측 생성")
+        await run(today)
+        _notify_discord(f"✅ 19:30 추론 완료 — {today} 경기 예측 생성")
 
     _run(run_inference_pipeline.__name__, _inner)
 
 
 def retrain_models_task() -> None:
     """일요일 03:00 KST — 주간 모델 재학습"""
-    logger.info("[retrain] 주간 모델 재학습 시작 (미구현 — Week 3에서 완성)")
+    import subprocess, sys
+    logger.info("[retrain] 주간 모델 재학습 시작")
+    try:
+        result = subprocess.run(
+            [sys.executable, "scripts/build_and_train.py"],
+            capture_output=True, text=True, timeout=3600,
+        )
+        if result.returncode == 0:
+            logger.info("[retrain] 재학습 완료")
+            _notify_discord("✅ 주간 모델 재학습 완료")
+        else:
+            logger.error("[retrain] 재학습 실패:\n%s", result.stderr[-2000:])
+            _notify_discord(f"❌ 주간 모델 재학습 실패: {result.stderr[-200:]}")
+    except subprocess.TimeoutExpired:
+        logger.error("[retrain] 재학습 1시간 초과")
+        _notify_discord("❌ 주간 모델 재학습 타임아웃")
 
 
 # ──────────────────────────────────────────

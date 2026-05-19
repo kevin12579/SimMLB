@@ -7,6 +7,7 @@ from sqlalchemy.dialects.postgresql import insert
 
 from src.db.models.players import PlayerSeasonStats
 from src.common.logger import get_logger
+from src.db.player_utils import ensure_players_exist
 
 logger = get_logger(__name__)
 
@@ -71,6 +72,7 @@ async def save_pitching_stats(df: pd.DataFrame, season: int, as_of: date, sessio
 
     if not rows:
         return 0
+    ensure_players_exist({r["player_id"] for r in rows}, session)
     session.execute(insert(PlayerSeasonStats).values(rows).on_conflict_do_nothing())
     session.commit()
     logger.info("Saved %d pitcher season stats", len(rows))
@@ -103,6 +105,7 @@ async def save_batting_stats(df: pd.DataFrame, season: int, as_of: date, session
 
     if not rows:
         return 0
+    ensure_players_exist({r["player_id"] for r in rows}, session)
     session.execute(insert(PlayerSeasonStats).values(rows).on_conflict_do_nothing())
     session.commit()
     logger.info("Saved %d batter season stats", len(rows))

@@ -10,6 +10,7 @@ from src.db.models.teams import Team
 from src.db.models.players import Player
 from src.db.models.games import Game, TeamDailySnapshot
 from src.common.logger import get_logger
+from src.db.player_utils import ensure_players_exist
 
 logger = get_logger(__name__)
 
@@ -117,6 +118,16 @@ class MLBStatsAPIClient(BaseCollector):
     async def sync_schedule(self, game_date: date, session: Session) -> list[int]:
         """경기 일정을 DB에 UPSERT, game_pk 목록 반환"""
         raw_games = await self.fetch_schedule(game_date)
+
+        # 선발 투수가 players 테이블에 없으면 stub 삽입 (FK 위반 방지)
+        starter_ids: set[int] = set()
+        for g in raw_games:
+            for side in ("home", "away"):
+                pid = (g.get("teams", {}).get(side, {}).get("probablePitcher") or {}).get("id")
+                if pid:
+                    starter_ids.add(int(pid))
+        ensure_players_exist(starter_ids, session)
+
         game_pks = []
         for g in raw_games:
             teams = g.get("teams", {})

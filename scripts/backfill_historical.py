@@ -85,12 +85,15 @@ async def backfill_statcast(season: int) -> None:
 
 async def backfill_fangraphs(season: int) -> None:
     as_of = SEASON_DATES[season][1]
-    with get_session() as session:
-        pitch_df = await fetch_pitching_stats(season)
-        await save_pitching_stats(pitch_df, season, as_of, session)
-        bat_df = await fetch_batting_stats(season)
-        await save_batting_stats(bat_df, season, as_of, session)
-    logger.info("FanGraphs backfill done for %d", season)
+    try:
+        with get_session() as session:
+            pitch_df = await fetch_pitching_stats(season)
+            await save_pitching_stats(pitch_df, season, as_of, session)
+            bat_df = await fetch_batting_stats(season)
+            await save_batting_stats(bat_df, season, as_of, session)
+        logger.info("FanGraphs backfill done for %d", season)
+    except Exception as e:
+        logger.warning("FanGraphs backfill skipped for %d (will continue): %s", season, e)
 
 
 async def backfill(start_season: int = 2023, end_season: int = 2024) -> None:
@@ -108,7 +111,7 @@ async def backfill(start_season: int = 2023, end_season: int = 2024) -> None:
         # 3. 경기 결과
         await backfill_game_results(season)
 
-        # 4. FanGraphs
+        # 4. FanGraphs (403 차단 시 스킵하고 계속)
         await backfill_fangraphs(season)
 
         # 5. Statcast (시간이 가장 오래 걸림)

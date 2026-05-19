@@ -1,5 +1,7 @@
 """백필 후 데이터 무결성 검증 스크립트"""
 import sys
+import io
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 sys.path.insert(0, ".")
 
 from src.db.session import get_session
@@ -32,14 +34,14 @@ def verify() -> None:
 
         # 간단 경고
         if game_count < 4000:
-            print("  ⚠️  경기 수가 예상보다 적습니다. 백필을 확인하세요.")
+            print("  [WARN]  경기 수가 예상보다 적습니다. 백필을 확인하세요.")
         else:
-            print("  ✅ 경기 수 정상")
+            print("  [OK] 경기 수 정상")
 
         if team_count < 30:
-            print("  ⚠️  팀 수가 30개 미만입니다.")
+            print("  [WARN]  팀 수가 30개 미만입니다.")
         else:
-            print("  ✅ 팀 수 정상")
+            print("  [OK] 팀 수 정상")
 
 
 if __name__ == "__main__":

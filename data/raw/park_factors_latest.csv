@@ -1,0 +1,31 @@
+﻿team,season,run_factor,hr_factor,venue_name,venue_id,is_dome,altitude_ft,lf_ft,cf_ft,rf_ft,source
+ARI,2025,1.034,1.062,Chase Field,15,True,1082,330,407,334,hardcoded
+ATL,2025,0.991,0.98,Truist Park,4705,False,1050,335,400,325,hardcoded
+BAL,2025,0.987,0.993,Oriole Park at Camden Yards,2,False,52,333,410,318,hardcoded
+BOS,2025,1.043,0.964,Fenway Park,3,False,20,310,420,302,hardcoded
+CHC,2025,1.007,0.992,Wrigley Field,17,False,595,355,400,353,hardcoded
+CHW,2025,0.992,1.016,Guaranteed Rate Field,4,False,595,330,400,335,hardcoded
+CIN,2025,1.074,1.148,Great American Ball Park,2602,False,483,328,404,325,hardcoded
+CLE,2025,0.948,0.881,Progressive Field,5,False,653,325,405,325,hardcoded
+COL,2025,1.186,1.224,Coors Field,19,False,5280,347,415,350,hardcoded
+DET,2025,0.952,0.916,Comerica Park,2394,False,600,345,420,330,hardcoded
+HOU,2025,0.981,0.946,Minute Maid Park,2392,False,43,315,435,326,hardcoded
+KCR,2025,0.97,0.947,Kauffman Stadium,7,False,750,330,410,330,hardcoded
+LAA,2025,0.978,0.942,Angel Stadium,1,False,160,333,400,330,hardcoded
+LAD,2025,0.975,0.957,Dodger Stadium,22,False,512,330,395,330,hardcoded
+MIA,2025,0.92,0.878,loanDepot park,4169,True,6,344,407,335,hardcoded
+MIL,2025,0.984,1.011,American Family Field,32,False,635,344,400,345,hardcoded
+MIN,2025,1.013,1.073,Target Field,3312,False,841,339,404,328,hardcoded
+NYM,2025,0.962,0.926,Citi Field,3289,False,20,335,408,330,hardcoded
+NYY,2025,1.042,1.155,Yankee Stadium,3313,False,55,318,408,314,hardcoded
+OAK,2025,0.952,0.879,Oakland Coliseum,10,False,25,330,400,330,hardcoded
+PHI,2025,1.03,1.033,Citizens Bank Park,2681,False,20,329,401,330,hardcoded
+PIT,2025,0.971,0.919,PNC Park,31,False,730,325,399,320,hardcoded
+SDP,2025,0.938,0.887,Petco Park,2680,False,13,336,396,322,hardcoded
+SEA,2025,0.964,0.939,T-Mobile Park,680,False,0,331,401,326,hardcoded
+SFG,2025,0.95,0.87,Oracle Park,2395,False,0,339,399,309,hardcoded
+STL,2025,0.986,0.98,Busch Stadium,2889,False,465,336,400,335,hardcoded
+TBR,2025,0.977,1.001,Tropicana Field,12,True,15,315,404,322,hardcoded
+TEX,2025,1.048,1.083,Globe Life Field,5325,True,551,329,407,326,hardcoded
+TOR,2025,1.001,1.007,Rogers Centre,14,True,76,328,400,328,hardcoded
+WSN,2025,0.986,0.969,Nationals Park,3309,False,1,336,402,335,hardcoded

@@ -43,46 +43,33 @@ async def get_today_predictions() -> dict:
 
     today = date.today()
     with get_session() as session:
-        rows = (
-            session.query(GamePrediction, Game, Team, Team)
-            .join(Game, Game.game_pk == GamePrediction.game_pk)
-            .join(Team, Team.mlbam_team_id == Game.home_team_id)
-            .join(Team, Team.mlbam_team_id == Game.away_team_id, isouter=True)
-            .filter(GamePrediction.prediction_date == today)
-            .all()
-        )
+        preds = session.query(GamePrediction).filter(
+            GamePrediction.prediction_date == today
+        ).all()
+        team_map = {t.mlbam_team_id: t.abbreviation for t in session.query(Team).all()}
+        game_map = {g.game_pk: g for g in session.query(Game).filter(
+            Game.game_date == today
+        ).all()}
 
-        if not rows:
-            # 조인 없이 간단하게 조회
-            preds = session.query(GamePrediction).filter(
-                GamePrediction.prediction_date == today
-            ).all()
-            team_map = {t.mlbam_team_id: t.abbreviation for t in session.query(Team).all()}
-            game_map = {g.game_pk: g for g in session.query(Game).filter(
-                Game.game_date == today
-            ).all()}
+        games_list = []
+        for p in preds:
+            g = game_map.get(p.game_pk)
+            if not g:
+                continue
+            games_list.append({
+                "game_pk":       p.game_pk,
+                "home_team":     team_map.get(g.home_team_id, ""),
+                "away_team":     team_map.get(g.away_team_id, ""),
+                "home_win_prob": round(p.home_win_prob, 3),
+                "away_win_prob": round(p.away_win_prob, 3),
+                "confidence":    p.confidence_level,
+                "reasoning":     p.reasoning_text or "",
+                "top5_features": p.shap_top5 or [],
+            })
 
-            games_list = []
-            for p in preds:
-                g = game_map.get(p.game_pk)
-                if not g:
-                    continue
-                games_list.append({
-                    "game_pk":       p.game_pk,
-                    "home_team":     team_map.get(g.home_team_id, ""),
-                    "away_team":     team_map.get(g.away_team_id, ""),
-                    "home_win_prob": round(p.home_win_prob, 3),
-                    "away_win_prob": round(p.away_win_prob, 3),
-                    "confidence":    p.confidence_level,
-                    "reasoning":     p.reasoning_text or "",
-                    "top5_features": p.shap_top5 or [],
-                })
-
-            result = {"date": today.isoformat(), "games": games_list}
-            await redis.setex(cache_key, 3600, json.dumps(result))
-            return result
-
-    return {"date": today.isoformat(), "games": [], "message": "예측이 아직 생성되지 않았습니다."}
+    result = {"date": today.isoformat(), "games": games_list}
+    await redis.setex(cache_key, 3600, json.dumps(result, default=_serialize))
+    return result
 
 
 @router.get("/{game_pk}")

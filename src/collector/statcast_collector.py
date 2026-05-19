@@ -8,6 +8,7 @@ from sqlalchemy.dialects.postgresql import insert
 from src.db.models.games import StatcastPitch
 from src.common.logger import get_logger
 from src.common.exceptions import DataCollectionError
+from src.db.player_utils import ensure_players_exist
 
 logger = get_logger(__name__)
 
@@ -69,6 +70,14 @@ async def save_statcast(df: pd.DataFrame, session: Session) -> int:
         return 0
 
     df = _enrich(df)
+
+    # pitcher/batter FK 위반 방지: 없는 선수 ID를 stub으로 사전 삽입
+    player_ids: set[int] = set()
+    for col in ("pitcher", "batter"):
+        if col in df.columns:
+            player_ids.update(int(v) for v in df[col].dropna().unique())
+    ensure_players_exist(player_ids, session)
+
     rows = []
     for _, row in df.iterrows():
         rows.append(dict(
