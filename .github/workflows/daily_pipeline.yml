@@ -1,0 +1,69 @@
+name: Daily MLB Pipeline
+
+on:
+  schedule:
+    - cron: "30 10 * * *"   # UTC 10:30 = KST 19:30
+  workflow_dispatch:          # 수동 실행 버튼
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: mlb_prediction
+          POSTGRES_USER: mlb_user
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Poetry
+        run: pip install poetry
+
+      - name: Install dependencies
+        run: poetry install --no-root
+
+      - name: Run DB migration
+        env:
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: 5432
+          POSTGRES_DB: mlb_prediction
+          POSTGRES_USER: mlb_user
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+        run: poetry run alembic upgrade head
+
+      - name: Run daily inference
+        env:
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: 5432
+          POSTGRES_DB: mlb_prediction
+          POSTGRES_USER: mlb_user
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          REDIS_HOST: localhost
+          REDIS_PORT: 6379
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          LLM_PROVIDER: openai
+          OPENAI_MODEL: gpt-4o-mini
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          LOG_LEVEL: INFO
+          ENVIRONMENT: production
+        run: poetry run python scripts/run_daily_inference.py

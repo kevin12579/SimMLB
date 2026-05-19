@@ -1,0 +1,33 @@
+name: CI — Lint & Type Check
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Poetry
+        run: pip install poetry
+
+      - name: Install dependencies
+        run: poetry install --no-root
+
+      - name: Ruff lint
+        run: poetry run ruff check src/
+
+      - name: Ruff format check
+        run: poetry run ruff format --check src/
+
+      - name: Mypy type check
+        run: poetry run mypy src/ --ignore-missing-imports
+        continue-on-error: true  # 초기에는 경고만
