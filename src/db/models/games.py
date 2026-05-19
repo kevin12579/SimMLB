@@ -52,6 +52,7 @@ class GameLineup(Base):
 
     id          = Column(Integer, primary_key=True, autoincrement=True)
     game_pk     = Column(Integer, ForeignKey("games.game_pk"), nullable=False)
+    game_date   = Column(Date, nullable=False, index=True)
     player_id   = Column(Integer, ForeignKey("players.mlbam_id"), nullable=False)
     team_id     = Column(Integer, ForeignKey("teams.mlbam_team_id"), nullable=False)
     batting_order = Column(Integer)
@@ -115,6 +116,7 @@ class StatcastPitch(Base):
     launch_angle     = Column(Float)
     is_hard_hit      = Column(Boolean, default=False)  # 95mph+
     is_barrel        = Column(Boolean, default=False)
+    xwoba            = Column(Float)
     events           = Column(String(50))
     description      = Column(String(50))
     swing            = Column(Boolean, default=False)
