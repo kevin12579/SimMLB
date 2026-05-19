@@ -1,0 +1,22 @@
+{
+  "31":   {"run_factor": 0.96, "name": "Dodger Stadium"},
+  "3313": {"run_factor": 1.08, "name": "Yankee Stadium"},
+  "2392": {"run_factor": 0.93, "name": "Fenway Park"},
+  "2681": {"run_factor": 1.05, "name": "Wrigley Field"},
+  "2394": {"run_factor": 0.89, "name": "Oracle Park"},
+  "2395": {"run_factor": 0.97, "name": "T-Mobile Park"},
+  "5325": {"run_factor": 1.40, "name": "Coors Field"},
+  "2680": {"run_factor": 1.02, "name": "Chase Field"},
+  "15":   {"run_factor": 0.95, "name": "loanDepot park"},
+  "680":  {"run_factor": 0.97, "name": "Tropicana Field"},
+  "4169": {"run_factor": 1.01, "name": "Minute Maid Park"},
+  "2889": {"run_factor": 0.98, "name": "Rogers Centre"},
+  "3289": {"run_factor": 1.03, "name": "Busch Stadium"},
+  "2593": {"run_factor": 0.97, "name": "American Family Field"},
+  "2500": {"run_factor": 1.07, "name": "Great American Ball Park"},
+  "2602": {"run_factor": 1.02, "name": "Globe Life Field"},
+  "4705": {"run_factor": 0.95, "name": "Petco Park"},
+  "4914": {"run_factor": 1.00, "name": "Nationals Park"},
+  "2373": {"run_factor": 0.99, "name": "Kauffman Stadium"},
+  "2889": {"run_factor": 1.01, "name": "Rogers Centre"}
+}
