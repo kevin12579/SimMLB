@@ -1,0 +1,36 @@
+# 환경변수 (절대 올리면 안됨!)
+.env
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+dist/
+*.egg-info/
+
+# Poetry
+# poetry.lock  # 팀 내 협의 후 결정
+
+# 데이터 / 학습된 모델 파일 (루트 디렉토리만)
+/data/
+/models/
+*.parquet
+*.pkl
+*.joblib
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node (frontend)
+frontend/node_modules/
+frontend/.next/
+frontend/.env.local
