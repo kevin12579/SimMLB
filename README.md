@@ -441,9 +441,16 @@ poetry run alembic upgrade head
 poetry run uvicorn src.api.main:app --reload
 # → http://localhost:8000/health
 
-# 6. (선택) 추론 실행
+# 6. 당일 추론 실행 (프론트 접속 전 반드시 먼저 실행)
 poetry run python scripts/run_inference_v2.py
 ```
+
+> ⚠️ **로컬 캐시 주의**: 추론 전에 프론트엔드에 접속하면 Redis가 빈 응답을 1시간 동안 캐시합니다.
+> 이 경우 추론 후에도 "오늘 예측 데이터가 아직 없습니다"가 계속 표시됩니다.
+> 아래 명령어로 캐시를 지운 뒤 브라우저를 새로고침하세요:
+> ```bash
+> docker exec simlb-redis-1 redis-cli FLUSHALL
+> ```
 
 ### 프론트엔드 실행
 
