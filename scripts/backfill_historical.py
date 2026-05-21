@@ -12,6 +12,9 @@ from src.collector.fangraphs_collector import (
     save_pitching_stats, save_batting_stats,
 )
 from src.collector.roster_sync import sync_all_rosters
+# ORM 메타 등록 (FK 해결)
+from src.db.models import teams as _teams  # noqa: F401
+from src.db.models import players as _players  # noqa: F401
 from src.db.session import get_session
 from src.common.logger import get_logger
 
@@ -20,6 +23,8 @@ logger = get_logger("backfill")
 SEASON_DATES = {
     2023: (date(2023, 3, 30), date(2023, 10, 1)),
     2024: (date(2024, 3, 20), date(2024, 9, 29)),
+    2025: (date(2025, 3, 27), date(2025, 9, 28)),
+    2026: (date(2026, 3, 26), date.today()),  # 진행 중 시즌
 }
 
 

@@ -18,5 +18,16 @@ class GamePrediction(Base):
     shap_top5        = Column(JSON)    # [{feature, value, shap_value}, ...]
     reasoning_text   = Column(Text)    # 한국어 분석 근거
     is_correct       = Column(Integer) # 1=맞음, 0=틀림, NULL=미정
+    # v2: 라이브 + 메타
+    weather_temp_f       = Column(Float)
+    weather_condition    = Column(String(50))
+    weather_wind         = Column(String(50))
+    live_lineup_synced_at = Column(TIMESTAMP(timezone=True))
+    live_home_win_prob   = Column(Float)
+    live_status          = Column(String(30))
+    live_current_inning  = Column(Integer)
+    live_score_home      = Column(Integer)
+    live_score_away      = Column(Integer)
+    live_updated_at      = Column(TIMESTAMP(timezone=True))
     created_at       = Column(TIMESTAMP(timezone=True), server_default=func.now())
     updated_at       = Column(TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())

@@ -9,6 +9,15 @@ interface ShapFeature {
   shap_value: number
 }
 
+interface LiveSnapshot {
+  status: string | null
+  home_win_prob: number | null
+  current_inning: number | null
+  score_home: number | null
+  score_away: number | null
+  updated_at: string | null
+}
+
 interface Prediction {
   game_pk: number
   home_team: string
@@ -18,6 +27,13 @@ interface Prediction {
   confidence: 'HIGH' | 'MED' | 'LOW'
   reasoning: string
   top5_features: ShapFeature[]
+  // v2: 라이브 / 날씨 / 라인업 (옵셔널)
+  weather_temp_f?: number | null
+  weather_condition?: string | null
+  weather_wind?: string | null
+  home_lineup_preview?: string[]
+  away_lineup_preview?: string[]
+  live?: LiveSnapshot | null
 }
 
 interface ApiResponse {
@@ -283,8 +299,28 @@ function GameRow({ game, onOpen, last }: {
           <span style={{ color: 'var(--ink-3)', fontWeight: 400, marginLeft: 4 }}>{pickPct}%</span>
         </div>
         <div style={{ marginTop: 5 }}>
-          <ProbBar homeProb={game.home_win_prob} variant="thin" />
+          <ProbBar homeProb={game.live?.home_win_prob ?? game.home_win_prob} variant="thin" />
         </div>
+        {game.live?.status === 'In Progress' && (
+          <div style={{
+            marginTop: 4, fontSize: 10, fontWeight: 700,
+            color: 'var(--red)', letterSpacing: '0.05em',
+          }}>
+            🔴 LIVE {game.live.score_away ?? 0}-{game.live.score_home ?? 0}
+            {game.live.current_inning ? ` · ${game.live.current_inning}회` : ''}
+            {game.live.home_win_prob != null
+              ? ` · 실시간 ${(game.live.home_win_prob * 100).toFixed(0)}%`
+              : ''}
+          </div>
+        )}
+        {game.live?.status === 'Final' && (
+          <div style={{
+            marginTop: 4, fontSize: 10, fontWeight: 700,
+            color: 'var(--ink-3)', letterSpacing: '0.05em',
+          }}>
+            FINAL {game.live.score_away ?? 0}-{game.live.score_home ?? 0}
+          </div>
+        )}
       </div>
 
       {/* Conf */}

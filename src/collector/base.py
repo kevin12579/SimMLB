@@ -36,10 +36,18 @@ class BaseCollector(ABC):
         retry=retry_if_exception_type(RateLimitError),
         reraise=True,
     )
-    async def _get(self, url: str, params: dict | None = None) -> dict | list:
+    async def _get(
+        self,
+        url: str,
+        params: dict | None = None,
+        timeout: float | None = None,
+    ) -> dict | list:
         assert self._session is not None, "Use async context manager"
+        kwargs: dict = {"params": params}
+        if timeout is not None:
+            kwargs["timeout"] = aiohttp.ClientTimeout(total=timeout)
         async with _semaphore:
-            async with self._session.get(url, params=params) as resp:
+            async with self._session.get(url, **kwargs) as resp:
                 if resp.status == 429:
                     retry_after = int(resp.headers.get("Retry-After", 60))
                     logger.warning("Rate limit hit on %s, waiting %ds", url, retry_after)

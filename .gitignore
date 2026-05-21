@@ -17,10 +17,15 @@ dist/
 !/data/raw/
 /data/training_sets/
 /data/cache/
+/data/raw/war_archive/
 /models/*
 !/models/*.pkl
+/models/*_v3.pkl
 *.parquet
 *.joblib
+
+# 임시 디버깅/실험 스크립트 (underscore 접두사 관례)
+scripts/_*.py
 
 # Jupyter
 .ipynb_checkpoints/
