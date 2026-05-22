@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import sys
 from datetime import date
 from pathlib import Path
+from urllib.request import urlopen
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 sys.path.insert(0, ".")
@@ -59,9 +61,11 @@ def _shap_top5(model, x: np.ndarray) -> list[dict]:
             sv = sv[1]
         idx = np.argsort(np.abs(sv[0]))[::-1][:5]
         return [
-            {"feature": FEATURE_COLS_V2[i],
-             "value": float(x[0, i]),
-             "shap_value": float(sv[0][i])}
+            {
+                "feature": FEATURE_COLS_V2[i],
+                "value": float(x[0, i]),
+                "shap_value": float(sv[0][i]),
+            }
             for i in idx
         ]
     except Exception as e:
@@ -79,6 +83,26 @@ def _load_models() -> tuple:
     return lgbm, xgb, cal
 
 
+def _get_mlb_person_name(person_id: int | None) -> str | None:
+    """MLB Stats API에서 선수 ID로 선수 이름 조회."""
+    if not person_id:
+        return None
+
+    try:
+        url = f"https://statsapi.mlb.com/api/v1/people/{person_id}"
+        with urlopen(url, timeout=5) as res:
+            data = json.loads(res.read().decode("utf-8"))
+
+        people = data.get("people") or []
+        if not people:
+            return None
+
+        return people[0].get("fullName")
+    except Exception as e:
+        logger.debug("starter name lookup failed: %s", e)
+        return None
+
+
 def _rolling_win_map(session) -> dict[int, float]:
     """모든 팀의 최근 20경기 승률 (Final 경기만)."""
     rows = session.execute(text("""
@@ -86,11 +110,14 @@ def _rolling_win_map(session) -> dict[int, float]:
         FROM games WHERE status='Final' AND home_score IS NOT NULL
         ORDER BY game_date
     """)).fetchall()
+
     team_wins: dict[int, list[bool]] = {}
+
     for g in rows:
         home_won = g.home_score > g.away_score
         team_wins.setdefault(g.home_team_id, []).append(home_won)
         team_wins.setdefault(g.away_team_id, []).append(not home_won)
+
     return {
         tid: (sum(wins[-20:]) / len(wins[-20:])) if wins else 0.5
         for tid, wins in team_wins.items()
@@ -126,6 +153,7 @@ async def run_single(game_pk: int) -> None:
         team_rows = session.execute(
             text("SELECT mlbam_team_id, abbreviation FROM teams")
         ).fetchall()
+
         id_to_abbr = {r[0]: r[1] for r in team_rows}
         h_abbr = id_to_abbr.get(game.home_team_id, "")
         a_abbr = id_to_abbr.get(game.away_team_id, "")
@@ -133,26 +161,37 @@ async def run_single(game_pk: int) -> None:
         roll_map = _rolling_win_map(session)
         sc_pitcher = load_pitcher_individual_from_db(session, today)
         sc_team_bat = load_team_bat_statcast_from_db(session, today)
+
         lineup_ids = snap["home_lineup_ids"] + snap["away_lineup_ids"]
+
         sc_batter = load_batter_individual_from_db(session, lineup_ids, today)
+
         rest_cache = {
             game.home_team_id: get_rest_days(session, game.home_team_id, today),
             game.away_team_id: get_rest_days(session, game.away_team_id, today),
         }
 
         feat = build_feature_row_v2(
-            h_abbr=h_abbr, a_abbr=a_abbr, season=today.year,
+            h_abbr=h_abbr,
+            a_abbr=a_abbr,
+            season=today.year,
             h_roll=roll_map.get(game.home_team_id, 0.5),
             a_roll=roll_map.get(game.away_team_id, 0.5),
             h_starter_id=snap["home_starter_id"],
             a_starter_id=snap["away_starter_id"],
             h_lineup_ids=snap["home_lineup_ids"],
             a_lineup_ids=snap["away_lineup_ids"],
-            h_team_id=game.home_team_id, a_team_id=game.away_team_id,
-            pitch_team=pitch_team, bat_team=bat_team, park=park,
-            sc_pitcher_indiv=sc_pitcher, sc_team_bat=sc_team_bat,
-            sc_batter_indiv=sc_batter, rest_cache=rest_cache,
+            h_team_id=game.home_team_id,
+            a_team_id=game.away_team_id,
+            pitch_team=pitch_team,
+            bat_team=bat_team,
+            park=park,
+            sc_pitcher_indiv=sc_pitcher,
+            sc_team_bat=sc_team_bat,
+            sc_batter_indiv=sc_batter,
+            rest_cache=rest_cache,
         )
+
         x = np.array([[feat[c] for c in FEATURE_COLS_V2]])
 
         # 4) 앙상블 + Isotonic
@@ -163,7 +202,18 @@ async def run_single(game_pk: int) -> None:
 
         # 5) SHAP + LLM 근거
         top5 = _shap_top5(lgbm, x)
-        reasoning = await generate_reasoning(h_abbr, a_abbr, cal_p, top5)
+
+        h_starter_name = _get_mlb_person_name(snap.get("home_starter_id"))
+        a_starter_name = _get_mlb_person_name(snap.get("away_starter_id"))
+
+        reasoning = await generate_reasoning(
+            home_team=h_abbr,
+            away_team=a_abbr,
+            home_win_prob=cal_p,
+            shap_top5=top5,
+            home_starter=h_starter_name,
+            away_starter=a_starter_name,
+        )
 
         # 6) UPSERT
         stmt = insert(GamePrediction).values(
@@ -190,12 +240,17 @@ async def run_single(game_pk: int) -> None:
                 model_version="v2",
             ),
         )
+
         session.execute(stmt)
         session.commit()
 
     logger.info(
         "✅ game %d: %s @ %s → home %.1f%% [%s]",
-        game_pk, a_abbr, h_abbr, cal_p * 100, _confidence(cal_p),
+        game_pk,
+        a_abbr,
+        h_abbr,
+        cal_p * 100,
+        _confidence(cal_p),
     )
 
     # 7) Redis 캐시 무효화
@@ -206,6 +261,7 @@ def _invalidate_today_cache() -> None:
     try:
         import redis
         from config.settings import settings
+
         r = redis.from_url(f"redis://{settings.redis_host}:{settings.redis_port}")
         r.delete("predictions:today")
     except Exception as e:
@@ -215,7 +271,11 @@ def _invalidate_today_cache() -> None:
 async def run_all_today(target_date: date | None = None) -> None:
     """폴백 모드 — 19:30 KST 일괄 추론."""
     today = target_date or date.today()
+
     async with MLBStatsAPIClient() as client:
+        with get_session() as session:
+            await client.sync_teams(session)
+
         with get_session() as session:
             await client.sync_schedule(today, session)
             pks = [
@@ -227,7 +287,9 @@ async def run_all_today(target_date: date | None = None) -> None:
                 )
                 .all()
             ]
+
     logger.info("일괄 추론 대상: %d경기", len(pks))
+
     for pk in pks:
         try:
             await run_single(pk)
@@ -237,10 +299,12 @@ async def run_all_today(target_date: date | None = None) -> None:
 
 if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--game-pk", type=int)
     parser.add_argument("--date", type=str, help="YYYY-MM-DD (run_all_today)")
     args = parser.parse_args()
+
     if args.game_pk:
         asyncio.run(run_single(args.game_pk))
     else:

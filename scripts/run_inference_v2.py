@@ -68,8 +68,10 @@ async def run(target_date: date | None = None) -> None:
     today = target_date or date.today()
     logger.info("=== 추론 시작: %s ===", today)
 
-    # 1. 오늘 경기 일정 동기화
+    # 1. 팀 동기화 → 경기 일정 동기화
     async with MLBStatsAPIClient() as client:
+        with get_session() as session:
+            await client.sync_teams(session)
         with get_session() as session:
             await client.sync_schedule(today, session)
 
