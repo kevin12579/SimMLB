@@ -67,6 +67,13 @@ async def get_live_game(game_pk: int):
         "home_name": teams.get("home", {}).get("teamName", ""),
         "away_name": teams.get("away", {}).get("teamName", ""),
         "venue": gd.get("venue", {}).get("name", ""),
+        "pitchers": {
+            "home_probable": ((gd.get("probablePitchers") or {}).get("home") or {}).get("fullName", ""),
+            "away_probable": ((gd.get("probablePitchers") or {}).get("away") or {}).get("fullName", ""),
+            "current": (ls.get("defense", {}).get("pitcher") or {}).get("fullName", ""),
+            "winner": (ld.get("decisions", {}).get("winner") or {}).get("fullName", ""),
+            "loser": (ld.get("decisions", {}).get("loser") or {}).get("fullName", ""),
+        },
     }
 
     await redis.setex(cache_key, 10, json.dumps(result))

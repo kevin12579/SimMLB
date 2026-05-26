@@ -6,6 +6,7 @@ import redis.asyncio as aioredis
 from config.settings import settings
 from src.db.session import get_session
 from src.db.models.games import Game
+from src.db.models.players import Player
 from src.db.models.predictions import GamePrediction
 from src.db.models.teams import Team
 
@@ -44,6 +45,16 @@ async def archive_summary(target_date: str):
         game_pks = [p.game_pk for p in preds]
         games = {g.game_pk: g for g in session.query(Game).filter(Game.game_pk.in_(game_pks)).all()}
 
+        # 선발 투수 이름 조회
+        starter_ids = {
+            sid for g in games.values()
+            for sid in (g.home_starter_id, g.away_starter_id) if sid
+        }
+        starter_map: dict[int, str] = {}
+        if starter_ids:
+            for p in session.query(Player).filter(Player.mlbam_id.in_(starter_ids)).all():
+                starter_map[p.mlbam_id] = p.full_name
+
         games_list = []
         graded = correct = high_med_total = high_med_correct = 0
 
@@ -72,6 +83,8 @@ async def archive_summary(target_date: str):
                 "home_team": home, "away_team": away,
                 "home_score": g.home_score, "away_score": g.away_score,
                 "status": g.status,
+                "game_datetime": g.game_datetime.isoformat() if g.game_datetime else None,
+                "venue_name": g.venue_name,
                 "home_win_prob": round(p.home_win_prob, 3),
                 "away_win_prob": round(p.away_win_prob, 3),
                 "confidence": p.confidence_level,
@@ -79,6 +92,8 @@ async def archive_summary(target_date: str):
                 "actual_winner": actual_winner,
                 "is_correct": is_correct,
                 "model_version": p.model_version,
+                "home_starter_name": starter_map.get(g.home_starter_id or 0, ""),
+                "away_starter_name": starter_map.get(g.away_starter_id or 0, ""),
             })
 
         result = {

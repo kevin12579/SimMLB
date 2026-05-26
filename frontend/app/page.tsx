@@ -46,6 +46,7 @@ interface LiveData {
   runs:{home:number;away:number}; hits:{home:number;away:number}; errors:{home:number;away:number}
   runners:{first:boolean;second:boolean;third:boolean}
   home_team:string; away_team:string; home_name:string; away_name:string; venue:string
+  pitchers?:{home_probable:string;away_probable:string;current:string;winner:string;loser:string}
 }
 interface UserInfo { username:string; user_id:number; total:number; graded:number; correct:number; accuracy:number|null; streak:number; by_conf:Record<string,{n:number;correct:number;acc:number|null}> }
 interface UserPickItem { id:number; game_pk:number; game_date:string; home_team:string; away_team:string; pick_team:string; pick_prob:number|null; confidence:string; is_correct:number|null }
@@ -65,6 +66,10 @@ interface MlbScheduleGame {
   venue?:string
   home_score:number|null
   away_score:number|null
+  home_probable_pitcher?:string|null
+  away_probable_pitcher?:string|null
+  win_pitcher?:string|null
+  loss_pitcher?:string|null
 }
 
 /* ── Auth context ── */
@@ -122,6 +127,11 @@ function normalizeTeamCode(code?: string|null) {
 function getKstDateStr(): string {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Seoul' })
 }
+function getLastName(fullName?: string|null): string {
+  if (!fullName) return ''
+  const parts = fullName.trim().split(' ')
+  return parts[parts.length - 1]
+}
 function inningLabel(ld?: LiveData|null) {
   if(!ld || !ld.current_inning) return ''
   const state = String(ld.inning_state || ld.detailed_state || '').toLowerCase()
@@ -163,7 +173,7 @@ function formatKstTime(value?: string | null) {
   })
 }
 async function fetchMlbScheduleByDate(date:string): Promise<MlbScheduleGame[]> {
-  const url = `https://statsapi.mlb.com/api/v1/schedule?sportId=1&date=${date}&hydrate=team,linescore`
+  const url = `https://statsapi.mlb.com/api/v1/schedule?sportId=1&date=${date}&hydrate=team,linescore,decisions,probablePitcher`
   const r = await fetch(url)
   if(!r.ok) throw new Error('MLB schedule fetch failed')
   const d = await r.json()
@@ -185,6 +195,10 @@ async function fetchMlbScheduleByDate(date:string): Promise<MlbScheduleGame[]> {
       venue: g.venue?.name || '',
       away_score: away.score ?? null,
       home_score: home.score ?? null,
+      home_probable_pitcher: home.probablePitcher?.fullName || null,
+      away_probable_pitcher: away.probablePitcher?.fullName || null,
+      win_pitcher: g.decisions?.winner?.fullName || null,
+      loss_pitcher: g.decisions?.loser?.fullName || null,
     }
   })
 }
@@ -1003,7 +1017,7 @@ function ScreenArchive() {
               const cd=calMap[c.date]
               const isToday=c.date===todayStr
               const isSel=c.date===selDate
-              const dotClass=cd?.accuracy!=null?(cd.accuracy>=60?'good':cd.accuracy>=40?'bad':'neutral'):''
+              const dotClass=cd?.accuracy!=null?(cd.accuracy>=60?'good':cd.accuracy>=40?'med':'bad'):''
               return (
                 <div key={c.date} className={`cal-day ${cd?'has-data':''} ${isSel?'selected':''} ${isToday&&!isSel?'today-mark':''} ${dotClass}`}
                   onClick={()=>cd&&setSelDate(c.date!)}>
@@ -1014,7 +1028,7 @@ function ScreenArchive() {
             })}
           </div>
           <div style={{marginTop:16,display:'flex',gap:14}}>
-            {[['good','var(--green)','60%+ 적중'],['bad','var(--red)','40% 미만'],['neutral','var(--ink-4)','데이터 있음']].map(([cls,color,lbl])=>(
+            {[['good','var(--green)','60%+ 적중'],['med','var(--amber)','40~60%'],['bad','var(--red)','40% 미만']].map(([cls,color,lbl])=>(
               <div key={cls} style={{display:'flex',alignItems:'center',gap:5}}><div style={{width:8,height:8,borderRadius:'50%',background:color}}/><span className="num" style={{fontSize:10,color:'var(--ink-4)'}}>{lbl}</span></div>
             ))}
           </div>
@@ -1192,12 +1206,13 @@ function ScreenSchedule() {
               const hasMlb=(mlbCal[c.date]||0)>0
               const isToday=c.date===todayStr
               const isSel=c.date===selDate
-              const dotClass=cd?.accuracy!=null?(cd.accuracy>=60?'good':cd.accuracy>=40?'neutral':'bad'):(hasMlb?'mlb':'')
+              const dotClass=cd?.accuracy!=null?(cd.accuracy>=60?'good':cd.accuracy>=40?'med':'bad'):(hasMlb?'mlb':'')
               return <div key={c.date} className={`cal-day schedule-cal-day ${hasMlb?'has-mlb':''} ${cd?'has-data':''} ${isSel?'selected':''} ${isToday&&!isSel?'today-mark':''} ${dotClass}`} onClick={()=>setSelDate(c.date!)}><span>{c.day}</span>{hasMlb&&<div className="cal-dot"/>}{cd&&cd.graded>0&&<small>{cd.correct}/{cd.graded}</small>}</div>
             })}
           </div>
           <div className="schedule-legend">
             <span><i style={{background:'var(--green)'}}/>예측 적중률 60% 이상</span>
+            <span><i style={{background:'var(--amber)'}}/>예측 적중률 40~60%</span>
             <span><i style={{background:'var(--red)'}}/>예측 적중률 40% 미만</span>
             <span><i style={{background:'var(--ink-4)'}}/>MLB 경기 있음</span>
           </div>
@@ -1229,12 +1244,20 @@ function ScreenSchedule() {
                 const isCorrect = pred?.is_correct ?? null
                 const timeStr = formatKstTime(pred?.game_datetime || item.game_datetime)
                 const status = statusKo(item.status, item.detailed_state)
+                const awayPitcher = hasScore
+                  ? (homeWon ? item.loss_pitcher : item.win_pitcher) || pred?.away_starter_name || null
+                  : item.away_probable_pitcher || pred?.away_starter_name || null
+                const homePitcher = hasScore
+                  ? (homeWon ? item.win_pitcher : item.loss_pitcher) || pred?.home_starter_name || null
+                  : item.home_probable_pitcher || pred?.home_starter_name || null
+                const awayPitcherCls = hasScore ? (!homeWon ? 'win' : 'loss') : 'start'
+                const homePitcherCls = hasScore ? (homeWon ? 'win' : 'loss') : 'start'
                 return (
                   <div key={item.game_pk} className={`schedule-game-row ${isCorrect===1?'hit':isCorrect===0?'miss':''} ${!hasPrediction?'no-pred':''}`}>
                     <div className="schedule-time"><span className="num">{timeStr}</span><span className="cond">{status}</span></div>
-                    <div className="schedule-team away"><TM code={away} size="lg"/><div><div className="lbl">AWAY</div><div className="cond team-code">{away}</div><div className="cond team-name">{TEAMS[away]?.city} {TEAMS[away]?.name || item.away_name}</div>{hasPrediction&&<div className="num team-prob">{(pred.away_win_prob*100).toFixed(1)}%</div>}</div></div>
+                    <div className="schedule-team away"><TM code={away} size="lg"/><div><div className="lbl">AWAY</div><div className="cond team-code">{away}</div><div className="cond team-name">{TEAMS[away]?.city} {TEAMS[away]?.name || item.away_name}</div>{hasPrediction&&<div className="num team-prob">{(pred.away_win_prob*100).toFixed(1)}%</div>}{awayPitcher&&<div className={`pitcher-label ${awayPitcherCls}`}>{getLastName(awayPitcher)}</div>}</div></div>
                     <div className="schedule-score">{hasScore?(<><span className={`score-num ${!homeWon?'win':''}`}>{awayScore}</span><span className="score-mid">vs</span><span className={`score-num ${homeWon?'win':''}`}>{homeScore}</span></>):(<span className="score-vs">vs</span>)}</div>
-                    <div className="schedule-team home"><div><div className="lbl">HOME</div><div className="cond team-code">{home}</div><div className="cond team-name">{TEAMS[home]?.city} {TEAMS[home]?.name || item.home_name}</div>{hasPrediction&&<div className="num team-prob home-prob">{(pred.home_win_prob*100).toFixed(1)}%</div>}</div><TM code={home} size="lg"/></div>
+                    <div className="schedule-team home"><div><div className="lbl">HOME</div><div className="cond team-code">{home}</div><div className="cond team-name">{TEAMS[home]?.city} {TEAMS[home]?.name || item.home_name}</div>{hasPrediction&&<div className="num team-prob home-prob">{(pred.home_win_prob*100).toFixed(1)}%</div>}{homePitcher&&<div className={`pitcher-label ${homePitcherCls}`}>{getLastName(homePitcher)}</div>}</div><TM code={home} size="lg"/></div>
                     <div className="schedule-pred">
                       {hasPrediction ? (<><div className="lbl">AI 예측</div><div className="cond pred-pick" style={{color:pickHome?'var(--navy)':'var(--red)'}}>{pickTeam} 승 <span>{pickProb!=null?(pickProb*100).toFixed(1):'—'}%</span></div><PBar home={pred.home_win_prob} h={7}/></>) : (<><div className="lbl">AI 예측</div><div className="cond pred-empty">예측 없음</div><div className="num" style={{fontSize:11,color:'var(--ink-4)'}}>MLB 일정만 표시</div></>)}
                     </div>
@@ -1332,9 +1355,9 @@ function ScreenLive() {
                       {isLive?<span className="live-badge"><span className="live-badge-dot"/>LIVE</span>:<span className="num live-time">{kstTime}</span>}
                       {isLive&&inning&&<span className="live-inning-now">{inning}</span>}
                     </div>
-                    <div className="live-team away"><TM code={g.away_team} size="md"/><div><div className="live-team-code" style={{opacity:isFinal&&homeWinning?.62:1}}>{g.away_team}</div><div className="live-team-name">{TEAMS[g.away_team]?.city} {TEAMS[g.away_team]?.name}</div>{isLive&&ld&&<div className="live-mini"><span>H {ld.hits.away}</span><span>E {ld.errors.away}</span></div>}</div></div>
+                    <div className="live-team away"><TM code={g.away_team} size="md"/><div><div className="live-team-code" style={{opacity:isFinal&&homeWinning?.62:1}}>{g.away_team}</div><div className="live-team-name">{TEAMS[g.away_team]?.city} {TEAMS[g.away_team]?.name}</div>{isLive&&ld&&<div className="live-mini"><span>H {ld.hits.away}</span><span>E {ld.errors.away}</span></div>}{isFinal&&ld?.pitchers?.loser&&!homeWinning&&<div className="live-pitcher win">{getLastName(ld.pitchers.winner)}</div>}{isFinal&&ld?.pitchers?.loser&&homeWinning&&<div className="live-pitcher loss">{getLastName(ld.pitchers.loser)}</div>}{!isFinal&&ld?.pitchers?.away_probable&&<div className="live-pitcher start">{getLastName(ld.pitchers.away_probable)}</div>}</div></div>
                     <div className="live-score-cell">{hasScore?(<><span className={`live-score-num ${awayWinning?'win':''}`}>{ld.runs.away}</span><span className="live-score-mid">-</span><span className={`live-score-num ${homeWinning?'win':''}`}>{ld.runs.home}</span>{isLive&&ld&&<div className="live-outs">{[0,1,2].map(i=><span key={i} className={i<ld.outs?'on':''}/>)}</div>}</>):<span className="live-vs">vs</span>}</div>
-                    <div className="live-team home"><div><div className="live-team-code" style={{opacity:isFinal&&awayWinning?.62:1}}>{g.home_team}</div><div className="live-team-name">{TEAMS[g.home_team]?.city} {TEAMS[g.home_team]?.name}</div>{isLive&&ld&&<div className="live-mini right"><span>H {ld.hits.home}</span><span>E {ld.errors.home}</span></div>}</div><TM code={g.home_team} size="md"/></div>
+                    <div className="live-team home"><div><div className="live-team-code" style={{opacity:isFinal&&awayWinning?.62:1}}>{g.home_team}</div><div className="live-team-name">{TEAMS[g.home_team]?.city} {TEAMS[g.home_team]?.name}</div>{isLive&&ld&&<div className="live-mini right"><span>H {ld.hits.home}</span><span>E {ld.errors.home}</span></div>}{isFinal&&ld?.pitchers?.winner&&homeWinning&&<div className="live-pitcher win">{getLastName(ld.pitchers.winner)}</div>}{isFinal&&ld?.pitchers?.loser&&!homeWinning&&<div className="live-pitcher loss">{getLastName(ld.pitchers.loser)}</div>}{!isFinal&&ld?.pitchers?.home_probable&&<div className="live-pitcher start">{getLastName(ld.pitchers.home_probable)}</div>}</div><TM code={g.home_team} size="md"/></div>
                     <div className="live-pred"><div className="cond" style={{color:pickHome?'var(--navy)':'var(--red)'}}>{pickTeam} <span>{pct}%</span></div><PBar home={g.home_win_prob} h={6}/></div>
                     <div className="live-status"><Conf level={g.confidence}/>{isLive&&ld?<Diamond runners={ld.runners}/>:<span>{isFinal?'종료':'예정'}</span>}</div>
                   </div>

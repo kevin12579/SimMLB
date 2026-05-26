@@ -164,18 +164,25 @@ class MLBStatsAPIClient(BaseCollector):
         return game_pks
 
     async def update_game_results(self, game_date: date, session: Session) -> None:
-        """전일 경기 결과(점수) 업데이트"""
+        """전일 경기 결과(점수) 업데이트 + 예측 채점"""
+        from src.db.models.predictions import GamePrediction
         raw_games = await self.fetch_schedule(game_date)
         for g in raw_games:
             if g.get("status", {}).get("abstractGameState") != "Final":
                 continue
             teams = g.get("teams", {})
+            h_score = teams.get("home", {}).get("score")
+            a_score = teams.get("away", {}).get("score")
             session.query(Game).filter(Game.game_pk == g["gamePk"]).update(
-                {
-                    "home_score": teams.get("home", {}).get("score"),
-                    "away_score": teams.get("away", {}).get("score"),
-                    "status": "Final",
-                }
+                {"home_score": h_score, "away_score": a_score, "status": "Final"}
             )
+            if h_score is not None and a_score is not None and h_score != a_score:
+                pred = session.query(GamePrediction).filter(
+                    GamePrediction.game_pk == g["gamePk"]
+                ).first()
+                if pred and pred.is_correct is None:
+                    home_won = h_score > a_score
+                    pick_home = pred.home_win_prob >= 0.5
+                    pred.is_correct = 1 if (home_won == pick_home) else 0
         session.commit()
         logger.info("Updated results for %s", game_date)

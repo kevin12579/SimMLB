@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from src.collector.base import BaseCollector
 from src.common.logger import get_logger
 from src.db.models.games import BatterGameLog, Game, PitcherGameLog
+from src.db.models.predictions import GamePrediction
 from src.db.player_utils import ensure_players_exist
 
 logger = get_logger(__name__)
@@ -123,6 +124,16 @@ class PostgameCollector(BaseCollector):
                     constraint="uq_batter_game_logs_pid_pk"
                 )
             )
+
+        # 4) 예측 채점
+        if h_score != a_score:
+            pred = session.query(GamePrediction).filter(
+                GamePrediction.game_pk == game_pk
+            ).first()
+            if pred and pred.is_correct is None:
+                home_won = h_score > a_score
+                pick_home = pred.home_win_prob >= 0.5
+                pred.is_correct = 1 if (home_won == pick_home) else 0
 
         session.commit()
         logger.info(

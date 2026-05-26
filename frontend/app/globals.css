@@ -189,6 +189,7 @@ button{cursor:pointer;border:none;background:none}
 .cal-day.today-mark{border-color:var(--red)}
 .cal-day .cal-dot{width:5px;height:5px;border-radius:50%;margin-top:3px}
 .cal-day.good .cal-dot{background:var(--green)}
+.cal-day.med .cal-dot{background:var(--amber)}
 .cal-day.bad .cal-dot{background:var(--red)}
 .cal-day.neutral .cal-dot{background:var(--ink-4)}
 
@@ -302,3 +303,24 @@ button{cursor:pointer;border:none;background:none}
 .schedule-game-row{grid-template-columns:84px 1.15fr 104px 1.15fr 220px 92px}.schedule-game-row.no-pred{border-left:4px solid var(--rule)}.schedule-game-row.hit{box-shadow:0 2px 14px rgba(30,140,90,.08)}.schedule-game-row.miss{box-shadow:0 2px 14px rgba(191,13,62,.06)}
 .schedule-team .team-code{color:#111827;font-size:24px}.schedule-team .team-name{color:#4B5563;font-weight:600}.schedule-time .num{font-size:15px;color:#111827}.schedule-time .cond{color:#4B5563;font-weight:700}.team-prob{font-size:12px;font-weight:800}.score-num{color:#8B95A4}.score-num.win{color:#111827}.pred-pick{font-size:20px}.pred-empty{font-size:18px;font-weight:800;color:#6B7280}.schedule-check{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;background:var(--green);color:#fff;font-family:var(--f-mono);font-size:16px;font-weight:900}.schedule-result .rc-hit{font-size:12px;background:rgba(30,140,90,.12)}.schedule-result .rc-miss{font-size:12px;background:rgba(191,13,62,.1)}
 @media(max-width:900px){.live-table-head{display:none}.live-game-row{grid-template-columns:1fr;gap:12px;padding:16px 20px}.live-team.home{justify-content:flex-start;text-align:left;flex-direction:row-reverse}.live-score-cell{justify-content:flex-start}.live-pred{align-items:flex-start}.live-status{align-items:flex-start}.schedule-game-row{grid-template-columns:1fr}}
+
+/* ── Pitcher labels ── */
+.pitcher-label{font-family:var(--f-mono);font-size:11px;font-weight:700;margin-top:3px;letter-spacing:.04em}
+.pitcher-label.win{color:var(--green)}
+.pitcher-label.loss{color:var(--red)}
+.pitcher-label.start{color:var(--ink-3)}
+.live-pitcher{font-family:var(--f-mono);font-size:11px;font-weight:700;margin-top:2px;letter-spacing:.04em}
+.live-pitcher.win{color:var(--green)}
+.live-pitcher.loss{color:var(--red)}
+.live-pitcher.start{color:var(--ink-3)}
+
+/* ── UI visibility improvements ── */
+.schedule-team .team-code{font-size:26px!important;color:#0F1620!important}
+.schedule-team .team-name{font-size:13px!important;color:#374151!important;font-weight:700!important}
+.schedule-time .num{font-size:16px!important;font-weight:800!important;color:#0F1620!important}
+.schedule-time .cond{font-size:12px!important;font-weight:700!important;color:#374151!important}
+.score-num{font-size:32px!important;font-weight:800!important}
+.pred-pick{font-size:20px!important;font-weight:800!important}
+.live-team-code{font-size:24px!important;font-weight:900!important;color:#0F1620!important}
+.live-team-name{font-size:13px!important;color:#374151!important;font-weight:700!important}
+.team-prob{font-size:13px!important;font-weight:800!important}
