@@ -1,15 +1,11 @@
-"""APScheduler 기반 일일 자동 파이프라인 — 옵션 B + 라이브 폴러 + 포스트게임 통합.
+"""APScheduler 기반 일일 자동 파이프라인 — 현지 변수 방어형 (타임존: America/New_York 기준)
 
-타임라인 (KST):
-  03:00 (일) 주간 모델 재학습
-  06:30 BBref 스텔스 스크래퍼 (pitching/batting overwrite)
-  07:00 전일 결과 + 오늘 일정 사전 동기화 (옵션 B)
-  12:00 전일 Statcast (1일 delta)
-  13:00 마스터: 오늘 경기마다 T-120/T-15/T+0 동적 등록
-  T-120  pre_game_sync (Live Feed 1차)
-  T-15   dynamic_inference (47피처 + LLM)
-  T+0    live_poller 1분 polling (Final 감지 시 자가 종료 + postgame 트리거)
-  19:30  fallback (동적 워커 누락 시 일괄 보충)
+타임라인 변환 (서머타임 기준):
+  - ET 03:00 (KST 16:00) [일] 주간 모델 재학습
+  - ET 04:30 (KST 17:30) BBref 스텔스 스크래퍼 (전일 완벽 마감 후 덮어쓰기)
+  - ET 05:00 (KST 18:00) run_morning_pipeline & 마스터 스케줄러 동시 실행
+  - ET 05:30 (KST 18:30) 전일 Statcast (1일 delta)
+  - ET 11:30 (KST 00:30) fallback (동적 워커 누락 시 일괄 보충)
 """
 from __future__ import annotations
 
@@ -35,35 +31,39 @@ from src.db.session import get_session
 
 logger = get_logger(__name__)
 
+# 글로벌 타임존 정의 (미국 동부 시간 기준)
+TARGET_TZ = ZoneInfo("America/New_York")
+
 
 # ──────────────────────────────────────────
-# 1. 고정 스케줄 태스크
+# 1. 고정 스케줄 태스크 (타임라인 최적화)
 # ──────────────────────────────────────────
 
 def run_morning_pipeline() -> None:
-    """07:00 KST — 전일 결과 + 오늘 일정 사전 동기화 (옵션 B)"""
+    """ET 05:00 (KST 18:00) — 전일 결과 완벽 마감 후 동기화"""
     async def _inner() -> None:
-        yesterday = date.today() - timedelta(days=1)
-        today = date.today()
+        # 미국 동부 시간 기준 어제와 오늘 정의
+        today_et = datetime.now(TARGET_TZ).date()
+        yesterday_et = today_et - timedelta(days=1)
+        
         async with MLBStatsAPIClient() as client:
             with get_session() as session:
-                await client.update_game_results(yesterday, session)
-                await client.sync_schedule(today, session)  # 옵션 B
+                await client.update_game_results(yesterday_et, session)
+                await client.sync_schedule(today_et, session)
         _notify_discord(
-            f"✅ 07:00 — {yesterday} 결과 + {today} 일정 사전 동기화"
+            f"✅ [Morning Pipeline] {yesterday_et} 결과 + {today_et} 일정 동기화 완료"
         )
     _run(run_morning_pipeline.__name__, _inner)
 
 
 def run_bref_daily_update() -> None:
-    """06:30 KST — BBref pitching/batting 시즌 누적 덮어쓰기"""
+    """ET 04:30 (KST 17:30) — BBref 전일 최종 데이터 마감 후 갱신"""
     def _inner() -> None:
         from src.collector.bref_scraper import update_bref_season
-        season = date.today().year
-        counts = update_bref_season(season)
+        today_et = datetime.now(TARGET_TZ).date()
+        counts = update_bref_season(today_et.year)
         _notify_discord(
-            f"✅ 06:30 BBref — pitching:{counts.get('pitching', 0)} "
-            f"batting:{counts.get('batting', 0)}"
+            f"✅ [BBref] pitching:{counts.get('pitching', 0)} batting:{counts.get('batting', 0)}"
         )
     try:
         logger.info("[pipeline] Starting run_bref_daily_update")
@@ -74,27 +74,27 @@ def run_bref_daily_update() -> None:
 
 
 def run_statcast_pipeline() -> None:
-    """12:00 KST — 전일 Statcast 1일 delta append"""
+    """ET 05:30 (KST 18:30) — 서부 연장전까지 완벽 반영된 전일 Statcast 수집"""
     async def _inner() -> None:
-        yesterday = date.today() - timedelta(days=1)
+        yesterday_et = datetime.now(TARGET_TZ).date() - timedelta(days=1)
         with get_session() as session:
-            df = await fetch_statcast_range(yesterday, yesterday)
+            df = await fetch_statcast_range(yesterday_et, yesterday_et)
             count = await save_statcast(df, session)
-        _notify_discord(f"✅ 12:00 Statcast — {count}개 저장")
+        _notify_discord(f"✅ [Statcast] {yesterday_et} 데이터 {count}개 저장 완료")
     _run(run_statcast_pipeline.__name__, _inner)
 
 
 def run_inference_fallback() -> None:
-    """19:30 KST 폴백 — 동적 워커 누락 경기 일괄 보충"""
+    """ET 11:30 (KST 00:30) 폴백 — 현지 시간 오전 중 누락 경기 보충"""
     async def _inner() -> None:
         from scripts.run_inference_v3 import run_all_today
         await run_all_today()
-        _notify_discord("✅ 19:30 폴백 추론 완료")
+        _notify_discord("✅ [Fallback] 당일 추론 보충 완료")
     _run("inference_fallback", _inner)
 
 
 def retrain_models_task() -> None:
-    """일요일 03:00 KST — 주간 모델 재학습"""
+    """ET 일요일 03:00 (KST 16:00) — 주간 모델 재학습"""
     import subprocess
     import sys
     logger.info("[retrain] 주간 모델 재학습 시작")
@@ -108,18 +108,17 @@ def retrain_models_task() -> None:
             _notify_discord("✅ 주간 모델 재학습 완료 (v2)")
         else:
             logger.error("[retrain] 재학습 실패:\n%s", result.stderr[-2000:])
-            _notify_discord(f"❌ 주간 모델 재학습 실패: {result.stderr[-200:]}")
+            _notify_discord(f"❌ 주간 모델 재학습 실패: result.stderr[-200:]")
     except subprocess.TimeoutExpired:
         logger.error("[retrain] 재학습 1시간 초과")
         _notify_discord("❌ 주간 모델 재학습 타임아웃")
 
 
 # ──────────────────────────────────────────
-# 2. 동적 워커 (DateTrigger 등록 대상)
+# 2. 동적 워커 (DateTrigger 등록 대상 — 수정 없음)
 # ──────────────────────────────────────────
 
 def run_pre_game_sync(game_pk: int) -> None:
-    """T-120min — Live Feed 1차 동기화 (라인업/날씨/선발)"""
     async def _inner() -> None:
         from src.collector.live_feed_client import LiveFeedClient
         async with LiveFeedClient() as lfc:
@@ -130,7 +129,6 @@ def run_pre_game_sync(game_pk: int) -> None:
 
 
 def run_dynamic_inference(game_pk: int) -> None:
-    """T-15min — Live Feed 재호출 + 47피처 추론 + LLM"""
     async def _inner() -> None:
         from scripts.run_inference_v3 import run_single
         await run_single(game_pk)
@@ -139,7 +137,6 @@ def run_dynamic_inference(game_pk: int) -> None:
 
 
 def start_live_poller(game_pk: int) -> None:
-    """T+0min — 1분 간격 라이브 폴러를 자가 종료형 IntervalTrigger 잡으로 등록"""
     sched = _get_global_scheduler()
     sched.add_job(
         _live_poll_tick,
@@ -154,7 +151,6 @@ def start_live_poller(game_pk: int) -> None:
 
 
 def _live_poll_tick(game_pk: int) -> None:
-    """1분마다 호출되는 라이브 폴러 워커. Final 감지 시 자가 제거 + postgame 트리거."""
     async def _inner() -> None:
         from src.collector.live_score_poller import LiveScorePoller
         async with LiveScorePoller() as p:
@@ -166,9 +162,11 @@ def _live_poll_tick(game_pk: int) -> None:
                 sched.remove_job(f"live_{game_pk}")
             except Exception:
                 pass
+            # Postgame 수집도 스케줄러 타임존에 맞춰 실행되도록 유도
+            run_time = datetime.now(TARGET_TZ) + timedelta(minutes=5)
             sched.add_job(
                 run_postgame_sync,
-                DateTrigger(run_date=datetime.now(ZoneInfo("Asia/Seoul")) + timedelta(minutes=5)),
+                DateTrigger(run_date=run_time),
                 args=[game_pk],
                 id=f"post_{game_pk}",
                 replace_existing=True,
@@ -178,7 +176,6 @@ def _live_poll_tick(game_pk: int) -> None:
 
 
 def run_postgame_sync(game_pk: int) -> None:
-    """경기 Final 직후 — boxscore → pitcher/batter game logs UPSERT"""
     async def _inner() -> None:
         from src.collector.postgame_collector import PostgameCollector
         async with PostgameCollector() as pc:
@@ -189,16 +186,16 @@ def run_postgame_sync(game_pk: int) -> None:
 
 
 # ──────────────────────────────────────────
-# 3. 마스터 스케줄러 (13:00 KST)
+# 3. 마스터 스케줄러 (ET 05:00 / KST 18:00)
 # ──────────────────────────────────────────
 
 def master_daily_scheduler(sched: BackgroundScheduler) -> None:
-    """13:00 KST — 오늘 경기마다 T-120/T-15/T+0 워커를 DateTrigger 동적 등록"""
+    """ET 05:00 (KST 18:00) — 오늘(현지 날짜) 열릴 모든 경기를 스캔하여 동적 예약"""
     async def _inner() -> None:
-        today = date.today()
+        today_et = datetime.now(TARGET_TZ).date()
         url = (
             f"https://statsapi.mlb.com/api/v1/schedule"
-            f"?sportId=1&date={today.isoformat()}"
+            f"?sportId=1&date={today_et.isoformat()}"
         )
         async with aiohttp.ClientSession() as s:
             async with s.get(url, timeout=15) as r:
@@ -206,34 +203,36 @@ def master_daily_scheduler(sched: BackgroundScheduler) -> None:
         dates = data.get("dates", [])
         games = dates[0].get("games", []) if dates else []
 
-        kst = ZoneInfo("Asia/Seoul")
-        now = datetime.now(kst)
+        now_et = datetime.now(TARGET_TZ)
         registered = 0
 
         for g in games:
             pk = g["gamePk"]
             try:
+                # API의 UTC 시간을 타임존 객체로 변환한 뒤 America/New_York 타임존으로 통합
                 gd_utc = datetime.strptime(
                     g["gameDate"], "%Y-%m-%dT%H:%M:%SZ"
                 ).replace(tzinfo=timezone.utc)
             except Exception:
                 continue
-            game_kst = gd_utc.astimezone(kst)
-            sync_at = game_kst - timedelta(minutes=120)
-            inf_at = game_kst - timedelta(minutes=15)
-            live_at = game_kst
+            
+            game_et = gd_utc.astimezone(TARGET_TZ)
+            sync_at = game_et - timedelta(minutes=120)
+            inf_at = game_et - timedelta(minutes=15)
+            live_at = game_et
 
-            if sync_at > now:
+            # 스케줄러 타임존(TARGET_TZ) 스탬프를 기반으로 Job 추가
+            if sync_at > now_et:
                 sched.add_job(
                     run_pre_game_sync, DateTrigger(run_date=sync_at),
                     args=[pk], id=f"sync_{pk}", replace_existing=True,
                 )
-            if inf_at > now:
+            if inf_at > now_et:
                 sched.add_job(
                     run_dynamic_inference, DateTrigger(run_date=inf_at),
                     args=[pk], id=f"inf_{pk}", replace_existing=True,
                 )
-            if live_at > now:
+            if live_at > now_et:
                 sched.add_job(
                     start_live_poller, DateTrigger(run_date=live_at),
                     args=[pk], id=f"livestart_{pk}", replace_existing=True,
@@ -241,13 +240,13 @@ def master_daily_scheduler(sched: BackgroundScheduler) -> None:
                 registered += 1
 
         _notify_discord(
-            f"👑 마스터: 오늘 {registered}경기 (pre/inf/live) 동적 예약 완료"
+            f"👑 [Master] {today_et} 일정 스캔 완료: 총 {registered}경기 동적 워커 등록 완료"
         )
     _run("master_daily_scheduler", _inner)
 
 
 # ──────────────────────────────────────────
-# 헬퍼
+# 헬퍼 함수 및 부트스트랩
 # ──────────────────────────────────────────
 
 def _run(name: str, coro_factory) -> None:
@@ -277,30 +276,28 @@ def _notify_discord(message: str) -> None:
         logger.warning("Discord notify failed: %s", e)
 
 
-# ──────────────────────────────────────────
-# 4. 스케줄러 부트스트랩
-# ──────────────────────────────────────────
-
 _SCHED: BackgroundScheduler | None = None
 
 
 def _get_global_scheduler() -> BackgroundScheduler:
-    """라이브 폴러가 자기 자신 제거하기 위해 module-level scheduler 참조."""
     assert _SCHED is not None, "setup_scheduler() must be called first"
     return _SCHED
 
 
 def setup_scheduler() -> BackgroundScheduler:
     global _SCHED
-    sched = BackgroundScheduler(timezone="Asia/Seoul")
+    
+    # 🌟 CRITICAL: 스케줄러 타임존을 미 동부 시간으로 변경하여 서머타임 이슈 원천 차단
+    sched = BackgroundScheduler(timezone=TARGET_TZ)
 
-    sched.add_job(run_bref_daily_update,   CronTrigger(hour=6,  minute=30))
-    sched.add_job(run_morning_pipeline,    CronTrigger(hour=7,  minute=0))
-    sched.add_job(run_statcast_pipeline,   CronTrigger(hour=12, minute=0))
+    # 미 동부 시간 기준 크론 트리거 등록 (현지 새벽 시간대 일괄 배치)
+    sched.add_job(run_bref_daily_update,   CronTrigger(hour=4,  minute=30))
+    sched.add_job(run_morning_pipeline,    CronTrigger(hour=5,  minute=0))
+    sched.add_job(run_statcast_pipeline,   CronTrigger(hour=5,  minute=30))
     sched.add_job(
-        master_daily_scheduler, CronTrigger(hour=13, minute=0), args=[sched]
+        master_daily_scheduler, CronTrigger(hour=5, minute=0), args=[sched]
     )
-    sched.add_job(run_inference_fallback,  CronTrigger(hour=19, minute=30))
+    sched.add_job(run_inference_fallback,  CronTrigger(hour=11, minute=30))
     sched.add_job(
         retrain_models_task,
         CronTrigger(day_of_week="sun", hour=3, minute=0),
@@ -314,10 +311,10 @@ if __name__ == "__main__":
     scheduler = setup_scheduler()
     scheduler.start()
 
-    # 부팅 시 오늘 일정 1회 강제 등록
+    # 시스템 최초 부트 시 현재 날짜 스케줄 예약 실행
     master_daily_scheduler(scheduler)
 
-    logger.info("Scheduler started. Press Ctrl+C to exit.")
+    logger.info("Scheduler started with America/New_York timezone. Press Ctrl+C to exit.")
     try:
         import time
         while True:
