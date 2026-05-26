@@ -1,5 +1,5 @@
 import type { Metadata } from 'next'
-import { Barlow_Condensed, JetBrains_Mono } from 'next/font/google'
+import { Barlow_Condensed, JetBrains_Mono, Noto_Sans_KR } from 'next/font/google'
 import './globals.css'
 
 const barlow = Barlow_Condensed({
@@ -16,6 +16,13 @@ const jetbrains = JetBrains_Mono({
   display: 'swap',
 })
 
+const notoSansKR = Noto_Sans_KR({
+  subsets: ['latin'],
+  weight: ['400', '500', '700', '900'],
+  variable: '--font-noto',
+  display: 'swap',
+})
+
 export const metadata: Metadata = {
   title: 'Diamond Lines · MLB AI 승부예측',
   description: 'MLB 정규시즌 당일 경기 홈팀 승리 확률 예측 — LightGBM + XGBoost 앙상블',
@@ -24,7 +31,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="ko">
-      <body className={`${barlow.variable} ${jetbrains.variable}`}>
+      <body className={`${barlow.variable} ${jetbrains.variable} ${notoSansKR.variable}`}>
         {children}
       </body>
     </html>
