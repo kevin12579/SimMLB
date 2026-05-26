@@ -42,15 +42,9 @@ async def archive_summary(target_date: str):
         # KST 날짜 D의 경기는 MLB US 날짜 D-1에 저장됨 (ET 저녁 = KST 다음날 아침)
         us_date = d - timedelta(days=1)
         us_game_pks = [g.game_pk for g in session.query(Game).filter(Game.game_date == us_date).all()]
-        if us_game_pks:
-            preds = session.query(GamePrediction).filter(
-                GamePrediction.game_pk.in_(us_game_pks)
-            ).all()
-        else:
-            # 과거 데이터 호환: prediction_date 직접 조회
-            preds = session.query(GamePrediction).filter(
-                GamePrediction.prediction_date == d
-            ).all()
+        preds = session.query(GamePrediction).filter(
+            GamePrediction.game_pk.in_(us_game_pks)
+        ).all() if us_game_pks else []
         game_pks = [p.game_pk for p in preds]
         games = {g.game_pk: g for g in session.query(Game).filter(Game.game_pk.in_(game_pks)).all()}
 

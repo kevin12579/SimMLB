@@ -1137,25 +1137,9 @@ function ScreenSchedule() {
   const predMap:Record<number,any> = {}
   ;(summary?.games || []).forEach((g:any)=>{ predMap[g.game_pk]=g })
 
-  const mergedGames = (() => {
-    const fromMlb = mlbGames.map(m => ({...m, prediction: predMap[m.game_pk] || null}))
-    const mlbIds = new Set(fromMlb.map(g=>g.game_pk))
-    const extraPred = (summary?.games || []).filter((g:any)=>!mlbIds.has(g.game_pk)).map((g:any)=>({
-      game_pk:g.game_pk,
-      game_datetime:g.game_datetime || null,
-      status:g.status || (g.home_score!=null ? 'Final' : 'Preview'),
-      detailed_state:g.status || '',
-      away_team:g.away_team,
-      home_team:g.home_team,
-      away_name:`${TEAMS[g.away_team]?.city || ''} ${TEAMS[g.away_team]?.name || ''}`.trim(),
-      home_name:`${TEAMS[g.home_team]?.city || ''} ${TEAMS[g.home_team]?.name || ''}`.trim(),
-      venue:'',
-      away_score:g.away_score ?? null,
-      home_score:g.home_score ?? null,
-      prediction:g,
-    }))
-    return [...fromMlb, ...extraPred].sort((a:any,b:any)=>String(a.game_datetime||'').localeCompare(String(b.game_datetime||'')))
-  })()
+  const mergedGames = mlbGames
+    .map(m => ({...m, prediction: predMap[m.game_pk] || null}))
+    .sort((a:any,b:any)=>String(a.game_datetime||'').localeCompare(String(b.game_datetime||'')))
 
   const firstDay = new Date(year,month-1,1).getDay()
   const daysInMonth = new Date(year,month,0).getDate()
