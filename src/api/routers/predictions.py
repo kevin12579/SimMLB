@@ -2,9 +2,16 @@ import json
 from datetime import date, datetime
 from typing import Any
 
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    import pytz as ZoneInfo  # type: ignore
+
 import redis.asyncio as aioredis
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import text
+
+_KST = ZoneInfo("Asia/Seoul")
 
 from config.settings import settings
 from src.db.models.games import Game, GameLineup
@@ -82,7 +89,7 @@ def _build_game_payload(pred: GamePrediction, game: Game, team_map: dict, sessio
 
 @router.get("/today")
 async def get_today_predictions() -> dict:
-    today = date.today()
+    today = datetime.now(_KST).date()
     cache_key = f"predictions:today:{today}"
     redis = _get_redis()
 

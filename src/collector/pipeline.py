@@ -4,9 +4,7 @@
   03:00 (일) 주간 모델 재학습
   06:30 BBref 스텔스 스크래퍼 (pitching/batting overwrite)
   07:00 전일 결과 + 오늘 일정 사전 동기화 (옵션 B)
-  07:30 FanGraphs 선수 통계
   12:00 전일 Statcast (1일 delta)
-  12:30 FanGraphs 리더보드 재수집
   13:00 마스터: 오늘 경기마다 T-120/T-15/T+0 동적 등록
   T-120  pre_game_sync (Live Feed 1차)
   T-15   dynamic_inference (47피처 + LLM)
@@ -30,12 +28,6 @@ from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from config.settings import settings
-from src.collector.fangraphs_collector import (
-    fetch_batting_stats,
-    fetch_pitching_stats,
-    save_batting_stats,
-    save_pitching_stats,
-)
 from src.collector.mlb_statsapi_client import MLBStatsAPIClient
 from src.collector.statcast_collector import fetch_statcast_range, save_statcast
 from src.common.logger import get_logger
@@ -81,20 +73,6 @@ def run_bref_daily_update() -> None:
         _notify_discord(f"❌ BBref 업데이트 실패: {e}")
 
 
-def run_player_stats_update() -> None:
-    """07:30 KST — FanGraphs 선수 통계 갱신"""
-    async def _inner() -> None:
-        season = date.today().year
-        as_of = date.today()
-        with get_session() as session:
-            pitch_df = await fetch_pitching_stats(season)
-            await save_pitching_stats(pitch_df, season, as_of, session)
-            bat_df = await fetch_batting_stats(season)
-            await save_batting_stats(bat_df, season, as_of, session)
-        _notify_discord(f"✅ 07:30 — {season} 시즌 선수 통계 갱신")
-    _run(run_player_stats_update.__name__, _inner)
-
-
 def run_statcast_pipeline() -> None:
     """12:00 KST — 전일 Statcast 1일 delta append"""
     async def _inner() -> None:
@@ -104,11 +82,6 @@ def run_statcast_pipeline() -> None:
             count = await save_statcast(df, session)
         _notify_discord(f"✅ 12:00 Statcast — {count}개 저장")
     _run(run_statcast_pipeline.__name__, _inner)
-
-
-def run_fangraphs_update() -> None:
-    """12:30 KST — FanGraphs 리더보드 재수집"""
-    run_player_stats_update()
 
 
 def run_inference_fallback() -> None:
@@ -323,9 +296,7 @@ def setup_scheduler() -> BackgroundScheduler:
 
     sched.add_job(run_bref_daily_update,   CronTrigger(hour=6,  minute=30))
     sched.add_job(run_morning_pipeline,    CronTrigger(hour=7,  minute=0))
-    sched.add_job(run_player_stats_update, CronTrigger(hour=7,  minute=30))
     sched.add_job(run_statcast_pipeline,   CronTrigger(hour=12, minute=0))
-    sched.add_job(run_fangraphs_update,    CronTrigger(hour=12, minute=30))
     sched.add_job(
         master_daily_scheduler, CronTrigger(hour=13, minute=0), args=[sched]
     )

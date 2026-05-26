@@ -7,10 +7,6 @@ sys.path.insert(0, ".")
 
 from src.collector.mlb_statsapi_client import MLBStatsAPIClient
 from src.collector.statcast_collector import fetch_statcast_range, save_statcast
-from src.collector.fangraphs_collector import (
-    fetch_pitching_stats, fetch_batting_stats,
-    save_pitching_stats, save_batting_stats,
-)
 from src.collector.roster_sync import sync_all_rosters
 # ORM 메타 등록 (FK 해결)
 from src.db.models import teams as _teams  # noqa: F401
@@ -88,19 +84,6 @@ async def backfill_statcast(season: int) -> None:
         await asyncio.sleep(5)
 
 
-async def backfill_fangraphs(season: int) -> None:
-    as_of = SEASON_DATES[season][1]
-    try:
-        with get_session() as session:
-            pitch_df = await fetch_pitching_stats(season)
-            await save_pitching_stats(pitch_df, season, as_of, session)
-            bat_df = await fetch_batting_stats(season)
-            await save_batting_stats(bat_df, season, as_of, session)
-        logger.info("FanGraphs backfill done for %d", season)
-    except Exception as e:
-        logger.warning("FanGraphs backfill skipped for %d (will continue): %s", season, e)
-
-
 async def backfill(start_season: int = 2023, end_season: int = 2024) -> None:
     logger.info("=== 백필 시작: %d ~ %d ===", start_season, end_season)
 
@@ -116,10 +99,7 @@ async def backfill(start_season: int = 2023, end_season: int = 2024) -> None:
         # 3. 경기 결과
         await backfill_game_results(season)
 
-        # 4. FanGraphs (403 차단 시 스킵하고 계속)
-        await backfill_fangraphs(season)
-
-        # 5. Statcast (시간이 가장 오래 걸림)
+        # 4. Statcast (시간이 가장 오래 걸림)
         await backfill_statcast(season)
 
     logger.info("=== 백필 완료 ===")

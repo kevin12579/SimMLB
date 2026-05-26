@@ -119,6 +119,9 @@ function normalizeTeamCode(code?: string|null) {
   const raw = String(code || '').trim().toUpperCase()
   return TEAM_CODE_ALIASES[raw] || raw
 }
+function getKstDateStr(): string {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Seoul' })
+}
 function inningLabel(ld?: LiveData|null) {
   if(!ld || !ld.current_inning) return ''
   const state = String(ld.inning_state || ld.detailed_state || '').toLowerCase()
@@ -243,8 +246,8 @@ function AuthModal({mode,onClose,onSuccess}:{mode:'login'|'register';onClose:()=
 
 /* ── Topbar ── */
 function Topbar({view,setView,gameCount,auth,onAuthClick,onLogout}:{view:string;setView:(v:string)=>void;gameCount:number;auth:AuthState;onAuthClick:(m:'login'|'register')=>void;onLogout:()=>void}) {
-  const wd=['SUN','MON','TUE','WED','THU','FRI','SAT'][new Date().getDay()]
-  const today=new Date().toISOString().slice(0,10)
+  const today=getKstDateStr()
+  const wd=['SUN','MON','TUE','WED','THU','FRI','SAT'][new Date(today+'T12:00:00').getDay()]
   return (
     <header className="topbar">
       <div className="topbar-brand" style={{cursor:'pointer'}} onClick={()=>setView('today')}>
@@ -947,9 +950,9 @@ function DetailHistory({ row:r, onBack }: { row:HistRow; onBack:()=>void }) {
    SCREEN: ARCHIVE (캘린더)
 ════════════════════════════════════ */
 function ScreenArchive() {
-  const now=new Date()
-  const [year,setYear]=useState(now.getFullYear())
-  const [month,setMonth]=useState(now.getMonth()+1)
+  const _kstStr=getKstDateStr()
+  const [year,setYear]=useState(parseInt(_kstStr.slice(0,4)))
+  const [month,setMonth]=useState(parseInt(_kstStr.slice(5,7)))
   const [calData,setCalData]=useState<CalDay[]>([])
   const [selDate,setSelDate]=useState<string|null>(null)
   const [summary,setSummary]=useState<ArchiveSummary|null>(null)
@@ -969,7 +972,7 @@ function ScreenArchive() {
   calData.forEach(d=>calMap[d.date]=d)
   const firstDay=new Date(year,month-1,1).getDay()
   const daysInMonth=new Date(year,month,0).getDate()
-  const todayStr=now.toISOString().slice(0,10)
+  const todayStr=getKstDateStr()
   const cells:Array<{date:string|null;day:number|null}>=[]
   for(let i=0;i<firstDay;i++) cells.push({date:null,day:null})
   for(let d=1;d<=daysInMonth;d++){
@@ -1056,10 +1059,10 @@ function ScreenArchive() {
    - 기존 History/Archive API를 유지하면서 한 화면으로 통합
 ════════════════════════════════════ */
 function ScreenSchedule() {
-  const now = new Date()
-  const initial = now.toISOString().slice(0,10)
-  const [year,setYear] = useState(now.getFullYear())
-  const [month,setMonth] = useState(now.getMonth()+1)
+  const _kstStr = getKstDateStr()
+  const initial = _kstStr
+  const [year,setYear] = useState(parseInt(_kstStr.slice(0,4)))
+  const [month,setMonth] = useState(parseInt(_kstStr.slice(5,7)))
   const [calData,setCalData] = useState<CalDay[]>([])
   const [mlbCal,setMlbCal] = useState<Record<string,number>>({})
   const [selDate,setSelDate] = useState<string>(initial)
@@ -1128,7 +1131,7 @@ function ScreenSchedule() {
 
   const firstDay = new Date(year,month-1,1).getDay()
   const daysInMonth = new Date(year,month,0).getDate()
-  const todayStr = now.toISOString().slice(0,10)
+  const todayStr = getKstDateStr()
   const cells:Array<{date:string|null;day:number|null}> = []
   for(let i=0;i<firstDay;i++) cells.push({date:null,day:null})
   for(let d=1;d<=daysInMonth;d++) cells.push({date:`${year}-${String(month).padStart(2,'0')}-${String(d).padStart(2,'0')}`,day:d})
@@ -1142,9 +1145,9 @@ function ScreenSchedule() {
     setMonth(base.getMonth()+1)
   }
   const moveDate = (delta:number) => {
-    const d = new Date(selDate+'T00:00:00')
-    d.setDate(d.getDate()+delta)
-    const next = d.toISOString().slice(0,10)
+    const [y,m,dy] = selDate.split('-').map(Number)
+    const d = new Date(y, m-1, dy+delta)
+    const next = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
     setSelDate(next); setYear(d.getFullYear()); setMonth(d.getMonth()+1)
   }
   const dayLabel = (() => {
@@ -1284,7 +1287,7 @@ function ScreenLive() {
   return (
     <div className="view-enter live-page">
       <div className="subhead">
-        <div><div className="kicker">LIVE SCOREBOARD · {new Date().toISOString().slice(0,10)}</div><h1 className="page-title">라이브 <span className="red">스코어</span></h1></div>
+        <div><div className="kicker">LIVE SCOREBOARD · {getKstDateStr()}</div><h1 className="page-title">라이브 <span className="red">스코어</span></h1></div>
         <div className="hero-kpis">
           <div className="hero-kpi"><div className="hk-lbl">진행 중</div><div className="hk-val cond green">{liveGames.length}</div><div className="hk-sub">LIVE</div></div>
           <div className="hero-kpi"><div className="hk-lbl">예정</div><div className="hk-val cond">{previewGames.length}</div><div className="hk-sub">UPCOMING</div></div>
