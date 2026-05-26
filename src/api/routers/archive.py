@@ -1,5 +1,5 @@
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from fastapi import APIRouter
 from sqlalchemy import text
 import redis.asyncio as aioredis
@@ -39,9 +39,18 @@ async def archive_summary(target_date: str):
     with get_session() as session:
         team_map = {t.mlbam_team_id: t.abbreviation for t in session.query(Team).all()}
 
-        preds = session.query(GamePrediction).filter(
-            GamePrediction.prediction_date == d
-        ).all()
+        # KST 날짜 D의 경기는 MLB US 날짜 D-1에 저장됨 (ET 저녁 = KST 다음날 아침)
+        us_date = d - timedelta(days=1)
+        us_game_pks = [g.game_pk for g in session.query(Game).filter(Game.game_date == us_date).all()]
+        if us_game_pks:
+            preds = session.query(GamePrediction).filter(
+                GamePrediction.game_pk.in_(us_game_pks)
+            ).all()
+        else:
+            # 과거 데이터 호환: prediction_date 직접 조회
+            preds = session.query(GamePrediction).filter(
+                GamePrediction.prediction_date == d
+            ).all()
         game_pks = [p.game_pk for p in preds]
         games = {g.game_pk: g for g in session.query(Game).filter(Game.game_pk.in_(game_pks)).all()}
 
@@ -119,19 +128,21 @@ async def archive_calendar(year: int, month: int):
     if cached: return json.loads(cached)
 
     with get_session() as session:
+        # game_date + 1일 = KST 날짜 기준으로 그룹핑
         rows = session.execute(text(f"""
-            SELECT prediction_date,
+            SELECT g.game_date + INTERVAL '1 day' AS kst_date,
                    COUNT(*) as total,
-                   SUM(CASE WHEN is_correct=1 THEN 1 ELSE 0 END) as correct,
-                   SUM(CASE WHEN is_correct IS NOT NULL THEN 1 ELSE 0 END) as graded
-            FROM game_predictions
-            WHERE EXTRACT(YEAR FROM prediction_date)={year}
-              AND EXTRACT(MONTH FROM prediction_date)={month}
-            GROUP BY prediction_date
-            ORDER BY prediction_date
+                   SUM(CASE WHEN gp.is_correct=1 THEN 1 ELSE 0 END) as correct,
+                   SUM(CASE WHEN gp.is_correct IS NOT NULL THEN 1 ELSE 0 END) as graded
+            FROM game_predictions gp
+            JOIN games g ON g.game_pk = gp.game_pk
+            WHERE EXTRACT(YEAR FROM g.game_date + INTERVAL '1 day')={year}
+              AND EXTRACT(MONTH FROM g.game_date + INTERVAL '1 day')={month}
+            GROUP BY g.game_date + INTERVAL '1 day'
+            ORDER BY kst_date
         """)).fetchall()
 
-    cal = [{"date": str(r[0]), "total": r[1], "correct": r[2], "graded": r[3],
+    cal = [{"date": str(r[0])[:10], "total": r[1], "correct": r[2], "graded": r[3],
             "accuracy": round(r[2]/r[3]*100,1) if r[3] else None} for r in rows]
     result = {"year": year, "month": month, "days": cal}
     await redis.setex(cache_key, 600, json.dumps(result, default=_ser))
