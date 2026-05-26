@@ -10,7 +10,11 @@ import joblib
 import numpy as np
 import pandas as pd
 import shap
-from datetime import date
+from datetime import date, datetime
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo  # type: ignore
 from pathlib import Path
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert
@@ -65,7 +69,7 @@ def _shap_top5(model, x_arr: np.ndarray) -> list[dict]:
 
 
 async def run(target_date: date | None = None) -> None:
-    today = target_date or date.today()
+    today = target_date or datetime.now(ZoneInfo("Asia/Seoul")).date()
     logger.info("=== 추론 시작: %s ===", today)
 
     # 1. 팀 동기화 → 경기 일정 동기화

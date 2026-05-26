@@ -9,7 +9,11 @@ import asyncio
 import io
 import json
 import sys
-from datetime import date
+from datetime import date, datetime
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo  # type: ignore
 from pathlib import Path
 from urllib.request import urlopen
 
@@ -126,7 +130,7 @@ def _rolling_win_map(session) -> dict[int, float]:
 
 async def run_single(game_pk: int) -> None:
     """단일 경기 추론 — Live Feed sync → 47피처 → ensemble → SHAP → LLM → DB UPSERT."""
-    today = date.today()
+    today = datetime.now(ZoneInfo("Asia/Seoul")).date()
     logger.info("=== inference v3 시작: game %d ===", game_pk)
 
     # 1) Live Feed 동기화 (날씨/라인업/선발)
@@ -270,7 +274,7 @@ def _invalidate_today_cache() -> None:
 
 async def run_all_today(target_date: date | None = None) -> None:
     """폴백 모드 — 19:30 KST 일괄 추론."""
-    today = target_date or date.today()
+    today = target_date or datetime.now(ZoneInfo("Asia/Seoul")).date()
 
     async with MLBStatsAPIClient() as client:
         with get_session() as session:
