@@ -172,7 +172,12 @@ function formatKstTime(value?: string | null) {
     timeZone: 'Asia/Seoul',
   })
 }
-async function fetchMlbScheduleByDate(date:string): Promise<MlbScheduleGame[]> {
+async function fetchMlbScheduleByDate(kstDate:string): Promise<MlbScheduleGame[]> {
+  // MLB game dates are US Eastern time. KST = UTC+9, ET ≈ UTC-4,
+  // so even a 1pm ET game is 2am KST next day → always fetch US date = KST date - 1 day.
+  const [ky,km,kd] = kstDate.split('-').map(Number)
+  const usDate = new Date(ky, km-1, kd-1)
+  const date = `${usDate.getFullYear()}-${String(usDate.getMonth()+1).padStart(2,'0')}-${String(usDate.getDate()).padStart(2,'0')}`
   const url = `https://statsapi.mlb.com/api/v1/schedule?sportId=1&date=${date}&hydrate=team,linescore,decisions,probablePitcher`
   const r = await fetch(url)
   if(!r.ok) throw new Error('MLB schedule fetch failed')
@@ -1092,13 +1097,22 @@ function ScreenSchedule() {
   },[year,month])
 
   useEffect(()=>{
-    const startDate = `${year}-${String(month).padStart(2,'0')}-01`
-    const endDate = `${year}-${String(month).padStart(2,'0')}-${String(new Date(year,month,0).getDate()).padStart(2,'0')}`
+    // KST date = US date + 1 day, so fetch US dates [month-1 last day .. month last day - 1]
+    const prevLastDay = new Date(year, month-1, 0)
+    const startDate = `${prevLastDay.getFullYear()}-${String(prevLastDay.getMonth()+1).padStart(2,'0')}-${String(prevLastDay.getDate()).padStart(2,'0')}`
+    const lastDay = new Date(year, month, 0).getDate()
+    const endDate = `${year}-${String(month).padStart(2,'0')}-${String(lastDay-1).padStart(2,'0')}`
     fetch(`https://statsapi.mlb.com/api/v1/schedule?sportId=1&startDate=${startDate}&endDate=${endDate}`)
       .then(r=>r.json())
       .then(d=>{
         const map:Record<string,number> = {}
-        ;(d?.dates || []).forEach((day:any)=>{ map[day.date] = day.totalGames || (day.games?.length ?? 0) })
+        ;(d?.dates || []).forEach((day:any)=>{
+          // Shift US date → KST date (+1 day)
+          const [uy,um,ud] = day.date.split('-').map(Number)
+          const kst = new Date(uy, um-1, ud+1)
+          const kstStr = `${kst.getFullYear()}-${String(kst.getMonth()+1).padStart(2,'0')}-${String(kst.getDate()).padStart(2,'0')}`
+          map[kstStr] = day.totalGames || (day.games?.length ?? 0)
+        })
         setMlbCal(map)
       })
       .catch(()=>setMlbCal({}))
