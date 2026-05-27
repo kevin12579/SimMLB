@@ -255,59 +255,73 @@ def run_startup_catchup(sched: BackgroundScheduler) -> None:
     - In Progress 경기: 라이브 폴러 즉시 등록
     """
     async def _inner() -> None:
-        today_et = datetime.now(TARGET_TZ).date()
-        url = (
-            f"https://statsapi.mlb.com/api/v1/schedule"
-            f"?sportId=1&date={today_et.isoformat()}"
+        now_et = datetime.now(TARGET_TZ)
+        today_et = now_et.date()
+        # ET 자정 이후(~09:00 ET)는 어제 경기가 Final 상태 — yesterday_et로 조회
+        # 낮/저녁 시간대(09:00 ET~)는 today_et로 조회
+        # 두 날짜 모두 스캔해서 Final/Live 경기를 모두 잡는다
+        check_dates = list({today_et, today_et - timedelta(days=1)})
+
+        all_finished: list = []
+        all_live: list = []
+        finished_date: date | None = None
+
+        for check_date in check_dates:
+            url = (
+                f"https://statsapi.mlb.com/api/v1/schedule"
+                f"?sportId=1&date={check_date.isoformat()}"
+            )
+            async with aiohttp.ClientSession() as s:
+                async with s.get(url, timeout=15) as r:
+                    data = await r.json()
+            dates = data.get("dates", [])
+            games = dates[0].get("games", []) if dates else []
+
+            fin = [g for g in games if g.get("status", {}).get("abstractGameState") == "Final"]
+            liv = [g for g in games if g.get("status", {}).get("abstractGameState") == "Live"]
+
+            if fin and not all_finished:
+                all_finished = fin
+                finished_date = check_date
+            all_live.extend(liv)
+
+        logger.info(
+            "[startup_catchup] 스캔 완료 — Final %d경기 (ET %s), Live %d경기",
+            len(all_finished), finished_date, len(all_live),
         )
-        async with aiohttp.ClientSession() as s:
-            async with s.get(url, timeout=15) as r:
-                data = await r.json()
-
-        dates = data.get("dates", [])
-        games = dates[0].get("games", []) if dates else []
-
-        finished = [
-            g for g in games
-            if g.get("status", {}).get("abstractGameState") == "Final"
-        ]
-        in_progress = [
-            g for g in games
-            if g.get("status", {}).get("abstractGameState") == "Live"
-        ]
 
         # 1. 종료 경기 일괄 갱신
-        if finished:
+        if all_finished and finished_date is not None:
             async with MLBStatsAPIClient() as client:
                 with get_session() as session:
-                    await client.update_game_results(today_et, session)
+                    await client.update_game_results(finished_date, session)
             logger.info(
-                "[startup_catchup] %d 종료 경기 결과 갱신 완료", len(finished)
+                "[startup_catchup] %d 종료 경기 결과 갱신 완료", len(all_finished)
             )
-            # Redis 캐시 삭제 (KST 날짜 기준)
-            kst_date = (today_et + timedelta(days=1)).isoformat()
+            # Redis 캐시 삭제 (KST 날짜 = ET날짜 + 1일)
+            kst_date = (finished_date + timedelta(days=1)).isoformat()
             try:
                 import redis as sync_redis
-                r = sync_redis.from_url(
+                rc = sync_redis.from_url(
                     f"redis://{settings.redis_host}:{settings.redis_port}"
                 )
-                r.delete(f"predictions:today:{kst_date}")
-                r.delete(f"archive:{kst_date}")
-                r.close()
+                rc.delete(f"predictions:today:{kst_date}")
+                rc.delete(f"archive:{kst_date}")
+                rc.close()
                 logger.info("[startup_catchup] Redis 캐시 삭제: %s", kst_date)
             except Exception as e:
                 logger.warning("[startup_catchup] Redis 캐시 삭제 실패: %s", e)
 
         # 2. 진행 중 경기 라이브 폴러 즉시 등록
-        for g in in_progress:
+        for g in all_live:
             pk = g["gamePk"]
             if not sched.get_job(f"live_{pk}"):
                 start_live_poller(pk)
                 logger.info("[startup_catchup] game %d 라이브 폴러 즉시 시작", pk)
 
         _notify_discord(
-            f"🔄 [Startup Catchup] 종료 {len(finished)}경기 갱신"
-            f", 진행중 {len(in_progress)}경기 폴러 등록"
+            f"🔄 [Startup Catchup] 종료 {len(all_finished)}경기 갱신"
+            f", 진행중 {len(all_live)}경기 폴러 등록"
         )
     _run("startup_catchup", _inner)
 
