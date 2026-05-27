@@ -246,6 +246,73 @@ def master_daily_scheduler(sched: BackgroundScheduler) -> None:
 
 
 # ──────────────────────────────────────────
+# 4. 시작 시 미처리 경기 즉시 처리
+# ──────────────────────────────────────────
+
+def run_startup_catchup(sched: BackgroundScheduler) -> None:
+    """스케줄러 시작 시 이미 종료/진행 중인 당일 경기를 즉시 처리.
+    - Final 경기: update_game_results로 스코어 + is_correct 일괄 갱신 후 Redis 캐시 삭제
+    - In Progress 경기: 라이브 폴러 즉시 등록
+    """
+    async def _inner() -> None:
+        today_et = datetime.now(TARGET_TZ).date()
+        url = (
+            f"https://statsapi.mlb.com/api/v1/schedule"
+            f"?sportId=1&date={today_et.isoformat()}"
+        )
+        async with aiohttp.ClientSession() as s:
+            async with s.get(url, timeout=15) as r:
+                data = await r.json()
+
+        dates = data.get("dates", [])
+        games = dates[0].get("games", []) if dates else []
+
+        finished = [
+            g for g in games
+            if g.get("status", {}).get("abstractGameState") == "Final"
+        ]
+        in_progress = [
+            g for g in games
+            if g.get("status", {}).get("abstractGameState") == "Live"
+        ]
+
+        # 1. 종료 경기 일괄 갱신
+        if finished:
+            async with MLBStatsAPIClient() as client:
+                with get_session() as session:
+                    await client.update_game_results(today_et, session)
+            logger.info(
+                "[startup_catchup] %d 종료 경기 결과 갱신 완료", len(finished)
+            )
+            # Redis 캐시 삭제 (KST 날짜 기준)
+            kst_date = (today_et + timedelta(days=1)).isoformat()
+            try:
+                import redis as sync_redis
+                r = sync_redis.from_url(
+                    f"redis://{settings.redis_host}:{settings.redis_port}"
+                )
+                r.delete(f"predictions:today:{kst_date}")
+                r.delete(f"archive:{kst_date}")
+                r.close()
+                logger.info("[startup_catchup] Redis 캐시 삭제: %s", kst_date)
+            except Exception as e:
+                logger.warning("[startup_catchup] Redis 캐시 삭제 실패: %s", e)
+
+        # 2. 진행 중 경기 라이브 폴러 즉시 등록
+        for g in in_progress:
+            pk = g["gamePk"]
+            if not sched.get_job(f"live_{pk}"):
+                start_live_poller(pk)
+                logger.info("[startup_catchup] game %d 라이브 폴러 즉시 시작", pk)
+
+        _notify_discord(
+            f"🔄 [Startup Catchup] 종료 {len(finished)}경기 갱신"
+            f", 진행중 {len(in_progress)}경기 폴러 등록"
+        )
+    _run("startup_catchup", _inner)
+
+
+# ──────────────────────────────────────────
 # 헬퍼 함수 및 부트스트랩
 # ──────────────────────────────────────────
 
@@ -311,8 +378,10 @@ if __name__ == "__main__":
     scheduler = setup_scheduler()
     scheduler.start()
 
-    # 시스템 최초 부트 시 현재 날짜 스케줄 예약 실행
+    # 미래 경기 동적 워커 등록
     master_daily_scheduler(scheduler)
+    # 이미 종료/진행 중인 경기 즉시 처리
+    run_startup_catchup(scheduler)
 
     logger.info("Scheduler started with America/New_York timezone. Press Ctrl+C to exit.")
     try:
