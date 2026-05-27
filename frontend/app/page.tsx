@@ -1088,6 +1088,7 @@ function ScreenSchedule() {
   const [summary,setSummary] = useState<ArchiveSummary|null>(null)
   const [mlbGames,setMlbGames] = useState<MlbScheduleGame[]>([])
   const [loadSum,setLoadSum] = useState(false)
+  const [refreshTick,setRefreshTick] = useState(0)
 
   useEffect(()=>{
     fetch(`${API}/archive/calendar?year=${year}&month=${month}`)
@@ -1118,21 +1119,29 @@ function ScreenSchedule() {
       .catch(()=>setMlbCal({}))
   },[year,month])
 
-  useEffect(()=>{
-    setLoadSum(true)
-    setSummary(null)
-    setMlbGames([])
+  const fetchDayData = useCallback((d:string, showLoading:boolean)=>{
+    if(showLoading){ setLoadSum(true); setSummary(null); setMlbGames([]) }
     Promise.allSettled([
-      fetch(`${API}/archive/summary?target_date=${selDate}`).then(r=>r.json()),
-      fetchMlbScheduleByDate(selDate),
+      fetch(`${API}/archive/summary?target_date=${d}`).then(r=>r.json()),
+      fetchMlbScheduleByDate(d),
     ]).then(([archiveRes, mlbRes])=>{
       if(archiveRes.status==='fulfilled') setSummary(archiveRes.value)
-      else setSummary({date:selDate,total:0,graded:0,correct:0,accuracy:null,high_med_accuracy:null,games:[]})
+      else if(showLoading) setSummary({date:d,total:0,graded:0,correct:0,accuracy:null,high_med_accuracy:null,games:[]})
       if(mlbRes.status==='fulfilled') setMlbGames(mlbRes.value)
-      else setMlbGames([])
+      else if(showLoading) setMlbGames([])
       setLoadSum(false)
     }).catch(()=>setLoadSum(false))
+  },[])
+
+  useEffect(()=>{ fetchDayData(selDate, true) },[selDate, fetchDayData])
+
+  // 오늘 날짜 선택 시 5분마다 자동 갱신
+  useEffect(()=>{
+    if(selDate!==getKstDateStr()) return
+    const id = setInterval(()=>{ setRefreshTick(t=>t+1) }, 5*60*1000)
+    return ()=>clearInterval(id)
   },[selDate])
+  useEffect(()=>{ if(refreshTick>0) fetchDayData(selDate, false) },[refreshTick, selDate, fetchDayData])
 
   const predMap:Record<number,any> = {}
   ;(summary?.games || []).forEach((g:any)=>{ predMap[g.game_pk]=g })
@@ -1239,7 +1248,8 @@ function ScreenSchedule() {
                 const pickHome = hasPrediction ? (pred.pick_team ? pred.pick_team===home : pred.home_win_prob>=.5) : false
                 const pickTeam = hasPrediction ? (pred.pick_team || (pickHome ? home : away)) : ''
                 const pickProb = hasPrediction ? (pred.pick_prob ?? Math.max(pred.home_win_prob,pred.away_win_prob)) : null
-                const isCorrect = pred?.is_correct ?? null
+                let isCorrect:number|null = pred?.is_correct ?? null
+                if(isCorrect===null && hasPrediction && hasScore) isCorrect = (homeWon===pickHome) ? 1 : 0
                 const timeStr = formatKstTime(pred?.game_datetime || item.game_datetime)
                 const status = statusKo(item.status, item.detailed_state)
                 const awayPitcher = hasScore
