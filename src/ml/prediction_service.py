@@ -34,7 +34,7 @@ def _load_models() -> tuple:
 
 def _confidence(prob: float) -> str:
     diff = abs(prob - 0.5)
-    if diff > 0.15:
+    if diff > 0.10:
         return "HIGH"
     if diff > 0.05:
         return "MED"
