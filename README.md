@@ -91,6 +91,11 @@ MLB 정규시즌 경기의 **홈팀 승리 확률을 ML 모델로 예측**하고
 | **`fix_player_stubs.py`** | MLB Stats API 벌크 조회로 DB 내 `"Player #N"` / `"TBD"` 이름 61건 실명 일괄 교체 |
 | **`park_factor.py`** | 구장 파크팩터 수집 전용 모듈 추가 (`src/collector/park_factor.py`) |
 | **Noto Sans KR 폰트** | 프론트엔드 한글 가시성 개선 |
+| **경기일정 프론트 즉석 채점** | `is_correct` DB null이어도 MLB API 스코어로 프론트에서 즉석 계산. 아침 파이프라인 전에도 ✓/✗ 즉시 표시 |
+| **경기일정 KPI 즉석 집계** | 상단 채점/적중 수치를 archive API 응답 대신 `mergedGames`에서 직접 계산. DB 채점 여부 무관하게 정확히 반영 |
+| **경기일정 5분 자동 갱신** | 오늘 날짜 선택 시 5분 간격 자동 재조회. 경기 종료 후 최대 5분 내 결과 반영 |
+| **`run_startup_catchup()`** | 스케줄러 시작 시 당일 Final 경기 즉시 `update_game_results` 실행 + Redis 캐시 삭제. 진행 중 경기는 라이브 폴러 즉시 등록 |
+| **HIGH 신뢰도 기준 완화** | `60%+` (종전 65%+)로 변경. `_confidence()` diff 임계값 `0.15 → 0.10` |
 
 ---
 
@@ -137,7 +142,10 @@ poetry run python src/collector/pipeline.py
 C:\Users\<user>\AppData\Local\pypoetry\Cache\virtualenvs\mlb-prediction-<hash>-py3.12\Scripts\python.exe src/collector/pipeline.py
 ```
 
-> **주의**: 시작 직후 `master_daily_scheduler()`가 즉시 호출되어 당일 경기 워커를 등록한다.
+> **시작 직후 자동 실행 순서**:
+> 1. `master_daily_scheduler()` — 오늘 남은 경기 동적 워커(T-120/T-15/T+0) 등록
+> 2. `run_startup_catchup()` — 이미 종료된 경기 `update_game_results` 즉시 실행 + Redis 캐시 삭제, 진행 중 경기 라이브 폴러 즉시 등록
+>
 > uvicorn만 실행해서는 스케줄러가 동작하지 않는다.
 
 ---
@@ -319,9 +327,9 @@ min_child_weight=3, gamma=4.66, reg_alpha=2.7e-06, reg_lambda=0.241
 
 | 레벨 | 조건 | 의미 |
 |---|---|---|
-| HIGH (초록) | `\|확률 - 0.5\| > 0.15` | 모델이 한 팀을 강하게 지목 |
-| MED (노랑) | `\|확률 - 0.5\| > 0.05` | 어느 정도 유리한 팀 있음 |
-| LOW (회색) | `\|확률 - 0.5\| ≤ 0.05` | 거의 반반 |
+| HIGH (초록) | `\|확률 - 0.5\| > 0.10` (60%+) | 모델이 한 팀을 강하게 지목 |
+| MED (노랑) | `\|확률 - 0.5\| > 0.05` (55%+) | 어느 정도 유리한 팀 있음 |
+| LOW (회색) | `\|확률 - 0.5\| ≤ 0.05` (~50%) | 거의 반반 |
 
 ---
 
@@ -797,6 +805,9 @@ game_live_states (1분 polling 시계열 — 차트용)
 | **선수명이 "Player #N" 형태** | 로스터 sync 시 MLB API 호출 실패 시 stub 저장 | `fix_player_stubs.py`로 61건 일괄 수정 |
 | **스케줄러 미기동** | uvicorn만 실행하면 APScheduler가 동작 안 함 | `pipeline.py`를 별도 프로세스로 실행 필요 |
 | **Poetry venv 외 Python 사용** | `python` 명령이 시스템 Python(3.12 bare) 실행 | 항상 `poetry run python` 또는 venv 절대 경로 사용 |
+| **startup_catchup 경기 미감지** | `datetime.now(ET).date()`가 자정 이후 KST에서 ET 다음날 반환 → 어제 경기 조회 실패 | `today_et`와 `yesterday_et` 두 날짜 모두 스캔하도록 수정 |
+| **스케줄러 시작 후 is_correct null** | 스케줄러 없이 종료된 경기는 아침 파이프라인 전까지 미채점 | `run_startup_catchup()` + 프론트 on-the-fly 즉석 계산으로 즉시 표시 |
+| **HIGH 신뢰도 n=0** | HIGH 임계값 65%(diff>0.15)로 설정 → 오늘 최고 62.4%가 MED로 분류 | `_confidence()` 임계값 `0.10`(60%+)으로 완화 |
 
 ### 15.3 라이브 폴러 잡 ID 충돌 방지
 
