@@ -1,8 +1,10 @@
-# ⚾ SimMLB — MLB 승부예측 AI 시스템 (v2)
+# ⚾ SimMLB — MLB 승부예측 AI 시스템 (v2.1)
 
 MLB 정규시즌 경기의 **홈팀 승리 확률을 ML 모델로 예측**하고, GPT-4o-mini가 **한국어 분석 근거를 자동 생성**하며, 경기 진행 중 **라이브 스코어와 라이브 승률**을 1분 간격으로 업데이트하는 풀스택 AI 시스템.
 
 > **v2 업데이트 (2026-05-21)** — 47개 피처(라인업 9명 Statcast + 선발투수 velo/spin/whiff + 휴식일 + dWAR) · 8,082경기 학습 · MLB Live Feed 통합 · 동적 스케줄러 · 라이브 polling · 자동 postgame 수집.
+>
+> **v2.1 패치 (2026-05-27)** — KST/ET 날짜 버그 다수 수정 · `/predictions/history` 신규 · 경기일정 ✓/✗ 아이콘 · 선수명 TBD 일괄 수정 · archive on-the-fly 채점 · park_factor 수집기 추가.
 
 ---
 
@@ -10,18 +12,19 @@ MLB 정규시즌 경기의 **홈팀 승리 확률을 ML 모델로 예측**하고
 
 1. [프로젝트 개요](#1-프로젝트-개요)
 2. [v2 주요 업데이트](#2-v2-주요-업데이트-2026-05-21)
-3. [시스템 파이프라인](#3-시스템-파이프라인)
-4. [데이터 수집 방식](#4-데이터-수집-방식)
-5. [피처 엔지니어링](#5-피처-엔지니어링)
-6. [ML 모델 및 성능](#6-ml-모델-및-성능)
-7. [AI 근거 생성 (LLM)](#7-ai-근거-생성-llm)
-8. [라이브 스코어 + 라이브 예측](#8-라이브-스코어--라이브-예측)
-9. [기술 스택](#9-기술-스택)
-10. [프로젝트 구조](#10-프로젝트-구조)
-11. [빠른 시작](#11-빠른-시작)
-12. [API 명세](#12-api-명세)
-13. [배포 구성](#13-배포-구성)
-14. [트러블슈팅 / 개발 메모](#14-트러블슈팅--개발-메모)
+3. [v2.1 패치노트](#3-v21-패치노트-2026-05-27)
+4. [시스템 파이프라인](#4-시스템-파이프라인)
+5. [데이터 수집 방식](#5-데이터-수집-방식)
+6. [피처 엔지니어링](#6-피처-엔지니어링)
+7. [ML 모델 및 성능](#7-ml-모델-및-성능)
+8. [AI 근거 생성 (LLM)](#8-ai-근거-생성-llm)
+9. [라이브 스코어 + 라이브 예측](#9-라이브-스코어--라이브-예측)
+10. [기술 스택](#10-기술-스택)
+11. [프로젝트 구조](#11-프로젝트-구조)
+12. [빠른 시작](#12-빠른-시작)
+13. [API 명세](#13-api-명세)
+14. [배포 구성](#14-배포-구성)
+15. [트러블슈팅 / 개발 메모](#15-트러블슈팅--개발-메모)
 
 ---
 
@@ -61,17 +64,47 @@ MLB 정규시즌 경기의 **홈팀 승리 확률을 ML 모델로 예측**하고
 
 ---
 
-## 3. 시스템 파이프라인
+## 3. v2.1 패치노트 (2026-05-27)
 
-### 3.1 일일 고정 잡 (KST 기준)
+### 버그 수정
+
+| 분류 | 내용 |
+|---|---|
+| **KST/ET 날짜** | `predictions/today`: DB `game_date`(ET 기준)를 KST로 조회할 때 `us_date = kst_today - 1일` 적용. 종전에는 당일 ET 날짜를 직접 사용해 밤 경기가 다음날 KST에서 누락됨 |
+| **KST/ET 날짜** | `run_inference_v3.py`: `sync_schedule(us_today)` · `Game.game_date == us_today` 적용. `date.today()` → KST 기준 변환 |
+| **KST/ET 날짜** | `archive/summary`: `us_date = kst_date - 1일` 적용. `archive/calendar` SQL: `game_date + INTERVAL '1 day'`로 KST 그룹핑 |
+| **Redis 캐시 키** | `predictions/today` 캐시 키를 날짜 접미사 포함 `predictions:today:{YYYY-MM-DD}` 형식으로 변경. 자정 교체 시 이전 날 캐시 무효화 |
+| **game_datetime 누락** | `_build_game_payload()` 응답에 `game_datetime` 필드 추가. 경기일정 탭 시간 표시에 필요 |
+| **예측 날짜 UPSERT** | `run_inference_v3.py`: `prediction_date=today` 누락으로 archive 조회 시 날짜 미매칭 발생 → UPSERT `set_` 딕셔너리에 추가 |
+| **선발 투수명 DB** | 추론 후 `players` 테이블에 선발 투수명을 즉시 upsert하도록 수정 (종전: 이름 미기재) |
+| **GameWeather 중복** | `game_pk` unique 제약 누락으로 UPSERT가 중복 행 생성 → `unique=True` 추가 |
+| **5/26 혼합 표시** | 5/26 KST 경기에 5/25 + 5/26 US 날짜 경기가 섞여 표시되던 문제 수정 |
+
+### 신규 기능
+
+| 기능 | 설명 |
+|---|---|
+| **`/predictions/history`** | 특정 날짜의 예측 이력 조회 (`?date=YYYY-MM-DD`). 달력 과거기록 뷰에서 사용 |
+| **archive on-the-fly 채점** | `is_correct` DB 필드가 null이어도 스코어가 있으면 archive API에서 즉석 계산 후 반환 |
+| **경기일정 ✓/✗ 아이콘** | 경기일정 탭의 각 경기 우측에 MED/HIGH 배지 + ✓(맞음)/✗(틀림) 아이콘 표시 |
+| **달력 과거기록 뷰** | "결과 LOG" 탭 제거 후 경기일정 달력이 과거기록 열람 통합 역할 담당 |
+| **`fix_player_stubs.py`** | MLB Stats API 벌크 조회로 DB 내 `"Player #N"` / `"TBD"` 이름 61건 실명 일괄 교체 |
+| **`park_factor.py`** | 구장 파크팩터 수집 전용 모듈 추가 (`src/collector/park_factor.py`) |
+| **Noto Sans KR 폰트** | 프론트엔드 한글 가시성 개선 |
+
+---
+
+## 4. 시스템 파이프라인
+
+### 4.1 일일 고정 잡 (KST 기준)
 
 ```
 03:00 (일) 주간 모델 재학습 (Optuna 50 trials)
 ─────────────────────────────────────────────
 06:30  BBref 스텔스 스크래퍼 (pitching/batting CSV 덮어쓰기)
 07:00  run_morning_pipeline
-         ├ 전일 경기 결과 update_game_results
-         └ sync_schedule(today)  ← 오늘 일정 사전 동기화 (옵션 B)
+         ├ 전일 경기 결과 update_game_results (is_correct 채점)
+         └ sync_schedule(today)  ← 오늘 일정 사전 동기화
 07:30  FanGraphs 선수 통계 갱신
 12:00  전일 Statcast append (delta 1일)
 12:30  FanGraphs 리더보드 재수집
@@ -80,7 +113,7 @@ MLB 정규시즌 경기의 **홈팀 승리 확률을 ML 모델로 예측**하고
 19:30  run_inference_fallback (동적 워커 누락 경기 일괄 보충)
 ```
 
-### 3.2 경기별 동적 워커 (DateTrigger)
+### 4.2 경기별 동적 워커 (DateTrigger)
 
 ```
 T-120min  pre_game_sync_{pk}    : Live Feed 1차 sync (날씨/라인업/선발)
@@ -92,11 +125,26 @@ T+0min    live_poller_start_{pk}: 1분 polling 시작
 [Final 감지] postgame_sync_{pk} : boxscore → game_logs UPSERT (자가 트리거)
 ```
 
+### 4.3 스케줄러 수동 시작
+
+스케줄러(`pipeline.py`)는 uvicorn API와 **별개 프로세스**로 실행해야 한다.
+
+```bash
+# Poetry 가상환경으로 실행 (필수)
+poetry run python src/collector/pipeline.py
+
+# 또는 가상환경 Python 직접 지정
+C:\Users\<user>\AppData\Local\pypoetry\Cache\virtualenvs\mlb-prediction-<hash>-py3.12\Scripts\python.exe src/collector/pipeline.py
+```
+
+> **주의**: 시작 직후 `master_daily_scheduler()`가 즉시 호출되어 당일 경기 워커를 등록한다.
+> uvicorn만 실행해서는 스케줄러가 동작하지 않는다.
+
 ---
 
-## 4. 데이터 수집 방식
+## 5. 데이터 수집 방식
 
-### 4.1 Baseball Reference (BBref) — 팀 시즌 통계 + dWAR
+### 5.1 Baseball Reference (BBref) — 팀 시즌 통계 + dWAR
 
 **v2 수집 방법**: **스텔스 스크래퍼로 매일 자동 수집** (`src/collector/bref_scraper.py`)
 - User-Agent 위장 (Chrome/Safari/Linux 로테이션)
@@ -123,13 +171,13 @@ T+0min    live_poller_start_{pk}: 1분 polling 시작
 - IP < 10, PA < 10 등 소표본 제거
 - 리그 평균값으로 폴백 (ERA 4.33, OPS 0.726 등)
 
-### 4.2 MLB StatsAPI — 경기 일정/결과/라이브
+### 5.2 MLB StatsAPI — 경기 일정/결과/라이브
 
 **엔드포인트**: `https://statsapi.mlb.com/api/v1`
 
 ```python
 # v1 endpoints
-GET /schedule?sportId=1&date=YYYY-MM-DD            # 경기 일정
+GET /schedule?sportId=1&date=YYYY-MM-DD            # 경기 일정 (ET 날짜 기준)
 GET /game/{game_pk}/linescore                       # 라이브 폴러 (1분 polling)
 GET /game/{game_pk}/boxscore                        # postgame 수집
 
@@ -140,9 +188,12 @@ GET /api/v1.1/game/{game_pk}/feed/live
   → liveData.boxscore.teams.{home,away}.battingOrder[]
 ```
 
+> **날짜 기준**: MLB Stats API는 **ET(Eastern Time) 기준** 날짜를 사용한다.
+> KST 날짜 D의 경기를 조회할 때는 `us_date = kst_date - 1일`을 사용해야 한다.
+
 **수집 내용**: 경기 일정, 홈/어웨이 팀 ID, 최종 스코어, 선발 투수 MLBAM ID, **확정 라인업 9명 mlbam_id**, **라이브 inning/score/winProbability**
 
-### 3.3 Statcast — 투구 데이터 (pybaseball)
+### 5.3 Statcast — 투구 데이터 (pybaseball)
 
 ```python
 import pybaseball
@@ -154,7 +205,7 @@ df = pybaseball.statcast(start_dt="2024-04-01", end_dt="2024-04-05")
 - `is_hard_hit` (95mph+), `is_barrel` 컬럼 직접 계산
 - `release_speed`, `spin_rate`, `launch_speed`, `launch_angle` 저장
 
-### 3.4 Open-Meteo — 구장 날씨
+### 5.4 Open-Meteo — 구장 날씨
 
 ```
 GET https://api.open-meteo.com/v1/forecast
@@ -164,15 +215,19 @@ GET https://api.open-meteo.com/v1/forecast
 
 MLB 30개 구장 좌표 하드코딩 → 당일 경기 시각(현지 시간) 기준 기온/풍속 조회
 
-### 3.5 FanGraphs — 선발 투수 세이버메트릭스
+### 5.5 FanGraphs — 선발 투수 세이버메트릭스
 
 `pybaseball.pitching_stats()` / `pybaseball.batting_stats()` 활용
 - FIP, xFIP, SIERA, SwStr%, Contact% 등 수집
 - `as_of_date` 기준 시점 제한 적용 (데이터 누수 방지)
 
+### 5.6 Park Factor 수집 (`src/collector/park_factor.py`)
+
+구장 파크팩터 전용 수집 모듈 (v2.1 신규). `park_factors.json`을 자동 갱신한다.
+
 ---
 
-## 5. 피처 엔지니어링
+## 6. 피처 엔지니어링
 
 ### v2 피처 목록 (47개)
 
@@ -222,9 +277,9 @@ BBref 시즌 통계는 **2024 경기 → 2023 BBref(전년도)**, **2023 경기 
 
 ---
 
-## 6. ML 모델 및 성능
+## 7. ML 모델 및 성능
 
-### 6.1 모델 구조
+### 7.1 모델 구조
 
 ```
 LightGBMClassifier ─┐
@@ -232,7 +287,7 @@ LightGBMClassifier ─┐
 XGBClassifier ──────┘   (역 logloss 가중치)   (확률 보정)
 ```
 
-### 6.2 v1 vs v2 성능 비교 (테스트셋)
+### 7.2 v1 vs v2 성능 비교 (테스트셋)
 
 | 지표 | v1 (29피처, 4912경기) | **v2 (47피처, 8082경기)** | 변화 |
 |---|---|---|---|
@@ -244,7 +299,7 @@ XGBClassifier ──────┘   (역 logloss 가중치)   (확률 보정)
 
 > MLB 경기 결과는 본질적으로 고노이즈 도메인 (홈팀 실제 승률 ~52%). AUC 0.56+가 도메인 한계 근처.
 
-### 6.3 v2 하이퍼파라미터 튜닝 (Optuna 100 trials, TPESampler seed=42)
+### 7.3 v2 하이퍼파라미터 튜닝 (Optuna 100 trials, TPESampler seed=42)
 
 **LightGBM 최적 파라미터**:
 ```
@@ -260,42 +315,7 @@ learning_rate=0.043, subsample=0.677, colsample_bytree=0.891,
 min_child_weight=3, gamma=4.66, reg_alpha=2.7e-06, reg_lambda=0.241
 ```
 
-### 5.3 시간순 학습/검증 분할 (70/15/15)
-
-```
-전체 4,912 경기 (2023–2024 시즌 완료 경기)
-  ├── Train set:  3,438경기 (70%) — 2023 ~ 2024 초반
-  ├── Val set:      737경기 (15%) — 2024 중반
-  └── Test set:     737경기 (15%) — 2024 후반
-```
-
-> 시간순 분할로 미래 데이터 누수 완전 차단
-
-### 5.4 최종 성능 (테스트셋 기준)
-
-| 모델 | Log Loss | AUC |
-|---|---|---|
-| LightGBM | 0.7325 | 0.5263 |
-| XGBoost | 0.6970 | **0.5507** |
-| 앙상블 + Calibration | 0.7890 | 0.5336 |
-
-> MLB 경기 결과는 본질적으로 고노이즈 도메인 (홈팀 실제 승률 ~52%). AUC 0.55는 베이스라인(랜덤 0.50) 대비 유의미한 예측력.
-
-### 5.5 앙상블 가중치
-
-역(inverse) log loss 기반 softmax 가중치:
-```
-LGBM weight = 0.488
-XGB  weight = 0.512
-```
-
-### 5.6 확률 보정 (Isotonic Calibration)
-
-`sklearn.isotonic.IsotonicRegression`으로 검증셋 기준 보정.
-- 모델 출력 확률이 실제 승리율과 일치하도록 단조 변환
-- 신뢰도 배지 계산에 보정된 확률 사용
-
-### 5.7 신뢰도 배지 기준
+### 7.4 신뢰도 배지 기준
 
 | 레벨 | 조건 | 의미 |
 |---|---|---|
@@ -305,7 +325,7 @@ XGB  weight = 0.512
 
 ---
 
-## 7. AI 근거 생성 (LLM)
+## 8. AI 근거 생성 (LLM)
 
 ### 흐름
 
@@ -334,8 +354,7 @@ DB game_predictions.reasoning_text 저장
     원정팀 타선 OPS(0.691)가 홈팀(0.754)에 비해 낮아 홈팀이 유리하다.",
   "shap_top5": [
     {"feature": "fip_diff", "value": 0.71, "shap_value": 0.089},
-    {"feature": "roll_win_diff", "value": 0.15, "shap_value": 0.067},
-    ...
+    {"feature": "roll_win_diff", "value": 0.15, "shap_value": 0.067}
   ]
 }
 ```
@@ -346,9 +365,9 @@ DB game_predictions.reasoning_text 저장
 
 ---
 
-## 8. 라이브 스코어 + 라이브 예측 (v2 신규)
+## 9. 라이브 스코어 + 라이브 예측 (v2 신규)
 
-### 8.1 라이브 폴러 (`src/collector/live_score_poller.py`)
+### 9.1 라이브 폴러 (`src/collector/live_score_poller.py`)
 
 경기 시작(T+0) 시점에 BackgroundScheduler가 IntervalTrigger(1분)로 자가 종료형 잡 등록:
 
@@ -368,7 +387,7 @@ DB game_predictions.reasoning_text 저장
   status == "Final" 감지 시 → 자기 자신 제거 + postgame_sync 트리거
 ```
 
-### 8.2 라이브 승률 계산 (`src/ml/live_win_prob.py`)
+### 9.2 라이브 승률 계산 (`src/ml/live_win_prob.py`)
 
 별도 in-game 모델을 학습하지 않고 다음 우선순위:
 
@@ -376,7 +395,7 @@ DB game_predictions.reasoning_text 저장
 2. **Tom Tango "The Book" 룩업 테이블** — (inning, lead) → 홈 승률
 3. **베이스 가중평균** — 룩업 없으면 진행도(inning/9)에 따라 base ↔ 0.5 감쇠
 
-### 8.3 자동 postgame 수집 (`src/collector/postgame_collector.py`)
+### 9.3 자동 postgame 수집 (`src/collector/postgame_collector.py`)
 
 라이브 폴러가 `status=Final` 감지 시 즉시(T+5min) 호출:
 
@@ -391,27 +410,27 @@ IP 변환: `"5.2"` (5와 2/3 이닝) → `5.667` 정확 계산.
 
 ---
 
-## 9. 기술 스택
+## 10. 기술 스택
 
 | 레이어 | 기술 | 버전 | 역할 |
 |---|---|---|---|
-| **언어** | Python | 3.11+ | 백엔드·ML 전체 |
+| **언어** | Python | 3.12 | 백엔드·ML 전체 |
 | **DB** | PostgreSQL | 16 | 경기·선수·예측 데이터 |
-| **캐시** | Redis | 7 | API 응답 캐시 (TTL 1시간) |
+| **캐시** | Redis | 7 | API 응답 캐시 (날짜별 TTL) |
 | **ORM** | SQLAlchemy | 2.0 | Python ↔ PostgreSQL |
 | **마이그레이션** | Alembic | 1.13+ | DB 스키마 버전 관리 |
 | **의존성** | Poetry | 최신 | Python 패키지 관리 |
-| **스케줄러** | APScheduler | 3.x | 7개 자동 파이프라인 잡 |
+| **스케줄러** | APScheduler | 3.x | 7개 자동 파이프라인 잡 (별도 프로세스) |
 | **ML** | LightGBM | 4.3+ | 그래디언트 부스팅 분류 |
 | **ML** | XGBoost | 2.0+ | 그래디언트 부스팅 분류 |
-| **튜닝** | Optuna | 3.5+ | 하이퍼파라미터 자동 최적화 (20 trials) |
+| **튜닝** | Optuna | 3.5+ | 하이퍼파라미터 자동 최적화 (100 trials) |
 | **보정** | scikit-learn | 1.4+ | IsotonicRegression |
 | **설명 가능 AI** | SHAP | 0.45+ | TreeExplainer 피처 기여도 |
 | **LLM** | OpenAI gpt-4o-mini | — | 한국어 분석 근거 생성 |
 | **데이터** | pybaseball | — | Statcast/FanGraphs 수집 |
 | **백엔드** | FastAPI + Uvicorn | 0.110+ | REST API |
 | **프론트엔드** | Next.js | 14 | 예측 결과 웹 UI |
-| **스타일링** | Tailwind CSS | 3 | 반응형 UI |
+| **폰트** | Noto Sans KR | — | 한국어 가시성 개선 |
 | **컨테이너** | Docker Compose | — | 로컬 개발 환경 |
 | **CI/CD** | GitHub Actions | — | 린트 + 일일 파이프라인 |
 | **배포 (백엔드)** | Render | 무료 티어 | FastAPI + Background Worker |
@@ -420,47 +439,49 @@ IP 변환: `"5.2"` (5와 2/3 이닝) → `5.667` 정확 계산.
 
 ---
 
-## 10. 프로젝트 구조
+## 11. 프로젝트 구조
 
 ```
-simlb/
+SimMLB/
 ├── src/
-│   ├── api/                        # C팀 — FastAPI 백엔드
+│   ├── api/                        # FastAPI 백엔드
 │   │   ├── main.py                 # 앱 진입점, CORS 설정
 │   │   └── routers/
 │   │       ├── predictions.py      # /predictions/* 엔드포인트 + Redis 캐시
+│   │       ├── archive.py          # 🆕 v2.1: /archive/* (날짜별 예측 이력)
 │   │       └── health.py           # /health 헬스체크
 │   │
-│   ├── collector/                  # A팀 — 데이터 수집
+│   ├── collector/                  # 데이터 수집
 │   │   ├── base.py                 # BaseCollector (재시도·Rate Limit, timeout 지원)
 │   │   ├── mlb_statsapi_client.py  # MLB 공식 API (경기/선수/라인업)
 │   │   ├── statcast_collector.py   # Statcast (pybaseball)
 │   │   ├── fangraphs_collector.py  # FanGraphs (FIP, xFIP, wRC+)
 │   │   ├── weather_client.py       # Open-Meteo (구장 날씨, v2 폴백)
 │   │   ├── roster_sync.py          # 팀 로스터 동기화
-│   │   ├── live_feed_client.py     # 🆕 v2: MLB Live Feed (날씨/라인업/선발 통합)
-│   │   ├── live_score_poller.py    # 🆕 v2: 1분 간격 라이브 스코어 + 라이브 승률
-│   │   ├── postgame_collector.py   # 🆕 v2: 경기 종료 후 boxscore → game_logs
-│   │   ├── bref_scraper.py         # 🆕 v2: BBref 스텔스 스크래퍼
-│   │   └── pipeline.py             # APScheduler (8 cron + 동적 워커 4종)
+│   │   ├── live_feed_client.py     # v2: MLB Live Feed (날씨/라인업/선발 통합)
+│   │   ├── live_score_poller.py    # v2: 1분 간격 라이브 스코어 + 라이브 승률
+│   │   ├── postgame_collector.py   # v2: 경기 종료 후 boxscore → game_logs
+│   │   ├── bref_scraper.py         # v2: BBref 스텔스 스크래퍼
+│   │   ├── park_factor.py          # 🆕 v2.1: 구장 파크팩터 수집 모듈
+│   │   └── pipeline.py             # APScheduler (고정 cron + 동적 워커 4종)
 │   │
-│   ├── db/                         # A팀 — 데이터베이스
+│   ├── db/                         # 데이터베이스
 │   │   ├── session.py              # SQLAlchemy 엔진·세션 관리
 │   │   ├── base.py                 # ORM Base 클래스
+│   │   ├── player_utils.py         # 선수 stub 처리 유틸
 │   │   └── models/
 │   │       ├── teams.py            # MLB 30개 팀
 │   │       ├── players.py          # 선수 마스터 (MLBAM ID)
-│   │       ├── games.py            # 경기 기록
+│   │       ├── games.py            # 경기 기록 (GameWeather unique 제약 포함)
 │   │       └── predictions.py      # ML 예측 결과
 │   │
-│   ├── ml/                         # B팀 — ML 파이프라인
+│   ├── ml/                         # ML 파이프라인
 │   │   ├── features/
 │   │   │   ├── bref_features.py    # BBref 피처 모듈 (v1 29피처)
-│   │   │   ├── bref_features_v2.py # 🆕 v2: 47피처 (라인업/선발 Statcast/dWAR/휴식)
-│   │   │   └── ...                 # team/pitcher/batter/context (구버전)
+│   │   │   └── bref_features_v2.py # v2: 47피처 (라인업/선발 Statcast/dWAR/휴식)
 │   │   ├── models/                 # LightGBM, XGBoost, 앙상블
 │   │   ├── reasoning/              # LLM 추상화 + 프롬프트 빌더
-│   │   ├── live_win_prob.py        # 🆕 v2: 라이브 승률 조정 함수
+│   │   ├── live_win_prob.py        # v2: 라이브 승률 조정 함수
 │   │   ├── build_training_data.py  # 학습 데이터셋 빌드
 │   │   ├── calibration.py          # Isotonic 보정
 │   │   └── prediction_service.py   # 추론 파이프라인 통합
@@ -471,62 +492,64 @@ simlb/
 │       └── exceptions.py           # 커스텀 예외
 │
 ├── scripts/
-│   ├── backfill_historical.py      # 2023–2026 과거 데이터 백필 (확장)
-│   ├── backfill_lineups.py         # 🆕 v2: game_lineups 백필
+│   ├── backfill_historical.py      # 2023–2026 과거 데이터 백필
+│   ├── backfill_lineups.py         # game_lineups 백필
 │   ├── build_and_train.py          # v1 학습 (29피처)
-│   ├── build_and_train_v2.py       # 🆕 v2: 47피처 학습 (--features v2|v3)
+│   ├── build_and_train_v2.py       # v2: 47피처 학습 (--features v2|v3)
 │   ├── run_inference_v2.py         # v1 모델 추론 (29피처)
-│   ├── run_inference_v3.py         # 🆕 v2 추론 (47피처 + Live Feed)
+│   ├── run_inference_v3.py         # v2 추론 (47피처 + Live Feed, KST 날짜 수정)
 │   ├── run_daily_inference.py      # 일일 추론 (v2 자동 감지 + v1 폴백)
-│   ├── update_dwar.py              # 🆕 v2: BBref WAR Daily → dWAR 마스터 CSV
+│   ├── fix_player_stubs.py         # 🆕 v2.1: "Player #N"/TBD 이름 MLB API로 일괄 수정
+│   ├── update_dwar.py              # BBref WAR Daily → dWAR 마스터 CSV
 │   └── verify_data_integrity.py    # DB 데이터 무결성 검증
 │
-├── frontend/                       # C팀 — Next.js 14
+├── frontend/                       # Next.js 14
 │   ├── app/
-│   │   └── page.tsx                # 당일 예측 테이블 (메인 페이지)
+│   │   ├── page.tsx                # 메인 페이지 (예측·일정·순위 탭 통합)
+│   │   └── globals.css             # 전역 스타일 (Noto Sans KR + RC chip)
 │   └── ...
 │
 ├── migrations/                     # Alembic DB 마이그레이션
 │   └── versions/
 │       ├── 140ec83bcd4a_initial_schema.py
 │       ├── 4fb0b416e598_add_game_date_....py
-│       └── a1b2c3d4e5f6_live_states_and_postgame.py  # 🆕 v2: live_states + live_*컬럼
+│       └── a1b2c3d4e5f6_live_states_and_postgame.py
 │
 ├── data/
-│   ├── raw/                        # BBref CSV + 파크팩터 JSON
+│   ├── raw/
 │   │   ├── bref_pitching_{year}.csv
 │   │   ├── bref_batting_{year}.csv
-│   │   ├── bref_dwar_master.csv    # 🆕 v2: WAR Daily에서 추출한 dWAR 마스터
-│   │   ├── war_archive/            # 🆕 v2: BBref WAR Daily 원본 (수동 다운로드)
+│   │   ├── bref_dwar_master.csv
+│   │   ├── war_archive/
 │   │   │   ├── war_daily_bat.txt
 │   │   │   └── war_daily_pitch.txt
 │   │   └── park_factors.json
 │   └── training_sets/
-│       └── training_set_v2.parquet # 🆕 v2: 8,082경기 × 51컬럼
+│       └── training_set_v2.parquet
 │
-├── models/                         # 학습된 모델 파일
-│   ├── lgbm_v1.pkl / xgb_v1.pkl / calibrator_v1.pkl   # v1 (29피처)
-│   ├── lgbm_v2.pkl                 # 🆕 v2 LightGBM (AUC 0.5750)
-│   ├── xgb_v2.pkl                  # 🆕 v2 XGBoost (AUC 0.5540)
-│   └── calibrator_v2.pkl           # 🆕 v2 앙상블+캘 (AUC 0.5640 ✅)
+├── models/
+│   ├── lgbm_v1.pkl / xgb_v1.pkl / calibrator_v1.pkl
+│   ├── lgbm_v2.pkl                 # v2 LightGBM (AUC 0.5750)
+│   ├── xgb_v2.pkl                  # v2 XGBoost (AUC 0.5540)
+│   └── calibrator_v2.pkl           # v2 앙상블+캘 (AUC 0.5640 ✅)
 │
 ├── .github/workflows/
-│   ├── ci.yml                      # Push 시 Ruff 린트 + mypy 타입 체크
-│   └── daily_pipeline.yml          # 매일 UTC 10:30 (KST 19:30) 자동 실행
+│   ├── ci.yml
+│   └── daily_pipeline.yml
 │
-├── render.yaml                     # Render Web Service + Background Worker
-├── docker-compose.yml              # 로컬 개발 PostgreSQL + Redis
-├── pyproject.toml                  # Poetry 의존성
-└── config/settings.py              # pydantic-settings 환경변수 관리
+├── render.yaml
+├── docker-compose.yml
+├── pyproject.toml
+└── config/settings.py
 ```
 
 ---
 
-## 11. 빠른 시작
+## 12. 빠른 시작
 
 ### 필요 조건
 
-- Python 3.11+
+- Python 3.12+
 - Node.js 18+
 - Docker Desktop
 - Poetry
@@ -551,15 +574,19 @@ poetry run alembic upgrade head
 poetry run uvicorn src.api.main:app --reload
 # → http://localhost:8000/health
 
-# 6. 당일 추론 실행 (프론트 접속 전 반드시 먼저 실행)
-poetry run python scripts/run_inference_v2.py
+# 6. 스케줄러 실행 (별도 터미널 — API와 독립 프로세스)
+poetry run python src/collector/pipeline.py
+
+# 7. 당일 추론 수동 실행 (스케줄러 T-15 워커 전 수동 테스트 시)
+poetry run python scripts/run_inference_v3.py
 ```
 
-> ⚠️ **로컬 캐시 주의**: 추론 전에 프론트엔드에 접속하면 Redis가 빈 응답을 1시간 동안 캐시합니다.
-> 이 경우 추론 후에도 "오늘 예측 데이터가 아직 없습니다"가 계속 표시됩니다.
-> 아래 명령어로 캐시를 지운 뒤 브라우저를 새로고침하세요:
+> **캐시 주의**: 추론 전 프론트엔드 접속 시 Redis가 빈 응답을 캐시합니다.
+> 아래 명령어로 캐시를 지운 뒤 새로고침하세요:
 > ```bash
-> docker exec simlb-redis-1 redis-cli FLUSHALL
+> docker exec simmlb-redis-1 redis-cli FLUSHALL
+> # 또는 날짜별 키만 삭제
+> docker exec simmlb-redis-1 redis-cli DEL "predictions:today:2026-05-27"
 > ```
 
 ### 프론트엔드 실행
@@ -571,43 +598,83 @@ npm run dev
 # → http://localhost:3000
 ```
 
+### 선수명 스텁 수정
+
+DB에 `"Player #N"` 또는 `"TBD"` 형태의 선수명이 있을 경우 MLB Stats API로 일괄 교체:
+
+```bash
+poetry run python scripts/fix_player_stubs.py
+```
+
 ### 모델 재학습
 
 ```bash
 # BBref CSV를 data/raw/에 업데이트 후
-poetry run python scripts/build_and_train.py
+poetry run python scripts/build_and_train_v2.py --features v2
 ```
 
 ---
 
-## 12. API 명세
+## 13. API 명세
 
 | 메서드 | 경로 | 설명 |
 |---|---|---|
 | GET | `/health` | 서버 헬스체크 |
-| GET | `/predictions/today` | 당일 전 경기 예측 목록 (Redis 1시간 캐시) |
+| GET | `/predictions/today` | 당일 전 경기 예측 목록 (KST 기준, Redis 캐시) |
 | GET | `/predictions/{game_pk}` | 특정 경기 예측 상세 (확률 + SHAP + 근거) |
+| GET | `/predictions/history` | 특정 날짜 예측 이력 (`?date=YYYY-MM-DD`) |
 | GET | `/games/{game_pk}` | 특정 경기 기본 정보 |
+| GET | `/archive/summary` | 날짜별 예측 결과 요약 (`?target_date=YYYY-MM-DD`) |
+| GET | `/archive/calendar` | 월별 달력 데이터 (`?year=2026&month=5`) |
 
 ### 응답 예시 (`/predictions/today`)
 
 ```json
 {
-  "date": "2025-06-01",
+  "date": "2026-05-27",
   "count": 15,
   "games": [
     {
       "game_pk": 746123,
       "home_team": "LAD",
       "away_team": "NYY",
+      "game_datetime": "2026-05-27T19:10:00",
       "home_win_prob": 0.623,
       "away_win_prob": 0.377,
       "confidence": "MED",
-      "reasoning": "홈팀 투수진 FIP(3.41)가 원정팀보다 우수하며, 최근 20경기 승률(0.650)이 리그 평균을 상회한다. 파크팩터(run_factor=1.08)도 홈팀 타선에 유리하게 작용한다.",
+      "home_starter_name": "Walker Buehler",
+      "away_starter_name": "Gerrit Cole",
+      "reasoning": "홈팀 투수진 FIP(3.41)가 원정팀보다 우수하며, 최근 20경기 승률(0.650)이 리그 평균을 상회한다.",
       "shap_top5": [
-        {"feature": "fip_diff", "value": 0.71, "shap_value": 0.089},
-        {"feature": "roll_win_diff", "value": 0.15, "shap_value": 0.067}
+        {"feature": "fip_diff", "value": 0.71, "shap_value": 0.089}
       ]
+    }
+  ]
+}
+```
+
+### 응답 예시 (`/archive/summary?target_date=2026-05-26`)
+
+```json
+{
+  "date": "2026-05-26",
+  "total": 11,
+  "graded": 11,
+  "correct": 5,
+  "accuracy": 45.5,
+  "high_med_accuracy": 50.0,
+  "games": [
+    {
+      "game_pk": 825004,
+      "home_team": "NYM",
+      "away_team": "ATL",
+      "home_score": 4,
+      "away_score": 2,
+      "home_win_prob": 0.572,
+      "confidence": "MED",
+      "pick_team": "NYM",
+      "actual_winner": "NYM",
+      "is_correct": 1
     }
   ]
 }
@@ -615,7 +682,7 @@ poetry run python scripts/build_and_train.py
 
 ---
 
-## 13. 배포 구성
+## 14. 배포 구성
 
 ### 백엔드 — Render
 
@@ -630,7 +697,7 @@ services:
 
   - type: worker      # APScheduler 파이프라인 워커
     name: mlb-prediction-worker
-    startCommand: python -c "from src.collector.pipeline import setup_scheduler; ..."
+    startCommand: python src/collector/pipeline.py
 ```
 
 > 무료 외부 DB 권장: **Neon.tech** (PostgreSQL), **Upstash** (Redis)
@@ -667,6 +734,7 @@ teams (30개 MLB 팀)
   ├── games (경기 기록 — game_pk 기준)
   │     ├── game_lineups      (확정 라인업)
   │     ├── game_predictions  (ML 예측 결과)
+  │     ├── game_weather      (날씨 정보, game_pk unique)
   │     └── pitcher_game_logs (선발 투수 기록)
   │
   ├── players (선수 마스터 — MLBAM ID 기준)
@@ -689,6 +757,7 @@ game_live_states (1분 polling 시계열 — 차트용)
 + weather_temp_f, weather_condition, weather_wind
 + live_home_win_prob, live_status, live_current_inning, live_score_home, live_score_away
 + live_updated_at, live_lineup_synced_at
++ prediction_date  ← v2.1: KST 기준 날짜 (archive 조회에 사용)
 ```
 
 ---
@@ -703,26 +772,33 @@ game_live_states (1분 polling 시계열 — 차트용)
 
 ---
 
-## 14. 트러블슈팅 / 개발 메모
+## 15. 트러블슈팅 / 개발 메모
 
-### 14.1 v1 → v2 마이그레이션 시 겪었던 이슈
+### 15.1 v1 → v2 마이그레이션 시 겪었던 이슈
 
 | 이슈 | 원인 | 해결 |
 |---|---|---|
-| **BBref Cloudflare 차단** | sandbox/CI IP를 Cloudflare 챌린지 | `bref_scraper.py` UA 로테이션 + 429 시 60s 대기. **사용자 PC에선 정상 동작** |
-| **WAR 마스터 자동 다운로드 차단** | 동일 Cloudflare | `--import-bat`/`--import-pit` 로컬 import 옵션 추가. 브라우저로 직접 받은 파일을 `data/raw/war_archive/` 에 두고 import |
-| **`game_lineups` 테이블 비어있음** | 학습 데이터에 라인업 미반영 → batter Statcast 폴백 88.5 | `backfill_lineups.py` 작성 → MLB Stats API boxscore로 4,914경기 백필 |
-| **`launch_speed` 평균 82.5 (표준 88+)** | foul ball까지 launch_speed 평균에 포함 | SQL 필터 `description = 'hit_into_play'` 추가 → 88.4 정상화 |
-| **`statcast_pitches.batter_team_id` 100% NULL** | 수집 시 team_id 미적재 | starter 매핑 SQL UPDATE로 58% 부분 보완 + `idx_statcast_batter_team_date` 인덱스 |
-| **Optuna stochasticity ±2%p** | seed 미고정 + n_trials=50 부족 | `TPESampler(seed=42)` + n_trials=100 (200은 overfit) |
-| **`scripts/_backfill_*.py` ORM FK 오류** | `from src.db.models.games import GameLineup` 만 import → `teams`/`players` 메타 미등록 | `from src.db.models import teams as _teams` 등 명시 import |
-| **`BaseCollector._get`이 timeout 인자 미지원** | 4.x 모듈들 `timeout=10` 호출 실패 | `_get(...)` 시그니처에 `timeout: float \| None = None` 추가 |
-| **expanding window 시점 분리 후 AUC 하락** | sparse 데이터 (시즌 초 경기는 누적 평균 없음) | 시즌 평균(약한 leak이지만 smooth) 채택 — 0.5287 → 0.5640 |
-| **`prev season` 강제 시 AUC 하락** | test set(2024 후반)에 1년 묵은 데이터 적용 → 신호 약화 | `target_season = season if (h_abbr, season) in pitch_team else season - 1` 채택 |
-| **diff 피처 추가 시 AUC 약간 하락** | 트리는 이미 interaction 자동 학습 → diff는 redundant | v3 (54피처) 폐기, v2 (47피처) 유지 |
-| **모델 파일 덮어쓰기로 best run 손실** | 학습마다 model PKL이 즉시 dump | `_multi_seed_train.py` 다중 seed best 선택 후 저장 |
+| **BBref Cloudflare 차단** | sandbox/CI IP를 Cloudflare 챌린지 | `bref_scraper.py` UA 로테이션 + 429 시 60s 대기 |
+| **WAR 마스터 자동 다운로드 차단** | 동일 Cloudflare | `--import-bat`/`--import-pit` 로컬 import 옵션 추가 |
+| **`game_lineups` 테이블 비어있음** | 학습 데이터에 라인업 미반영 | `backfill_lineups.py`로 MLB Stats API boxscore 4,914경기 백필 |
+| **`launch_speed` 평균 82.5 (표준 88+)** | foul ball 포함 | SQL 필터 `description = 'hit_into_play'` 추가 |
+| **Optuna stochasticity ±2%p** | seed 미고정 + n_trials 부족 | `TPESampler(seed=42)` + n_trials=100 |
 
-### 14.2 라이브 폴러 잡 ID 충돌 방지
+### 15.2 v2.1 패치 시 겪었던 이슈
+
+| 이슈 | 원인 | 해결 |
+|---|---|---|
+| **예측이 매일 자정 사라짐** | Redis 캐시 키 미포함 날짜 — 자정에 새 요청이 이전 날짜 키를 덮어씀 | 캐시 키를 `predictions:today:{YYYY-MM-DD}` 형식으로 변경 |
+| **5/26 경기가 5/27 KST 쿼리에서 빠짐** | `Game.game_date == kst_today`로 직접 비교 → ET 기준 DB와 불일치 | `us_date = kst_today - timedelta(days=1)` 적용 |
+| **game_datetime 필드 누락** | `_build_game_payload()`에 미포함 | `"game_datetime": game.game_datetime.isoformat()` 추가 |
+| **archive 적중률 항상 null** | `is_correct`가 아침 파이프라인 전까지 null | archive API에서 스코어 있으면 즉석 계산 |
+| **prediction_date 누락으로 archive 조회 실패** | UPSERT `set_` 딕셔너리에 `prediction_date` 미포함 | `set_=dict(..., prediction_date=today)` 추가 |
+| **GameWeather 중복 행** | `game_pk` unique 제약 없음 | `models/games.py`에 `unique=True` 추가 |
+| **선수명이 "Player #N" 형태** | 로스터 sync 시 MLB API 호출 실패 시 stub 저장 | `fix_player_stubs.py`로 61건 일괄 수정 |
+| **스케줄러 미기동** | uvicorn만 실행하면 APScheduler가 동작 안 함 | `pipeline.py`를 별도 프로세스로 실행 필요 |
+| **Poetry venv 외 Python 사용** | `python` 명령이 시스템 Python(3.12 bare) 실행 | 항상 `poetry run python` 또는 venv 절대 경로 사용 |
+
+### 15.3 라이브 폴러 잡 ID 충돌 방지
 
 ```python
 # 마스터가 등록한 startup 잡 (DateTrigger T+0)
@@ -735,7 +811,7 @@ post_{pk}       →  run run_postgame_sync(pk)
 
 서로 다른 ID 접두사로 충돌 없음. `replace_existing=True` + `max_instances=1`로 중복 방지.
 
-### 14.3 다중 seed 학습 결과 (v2 final)
+### 15.4 다중 seed 학습 결과 (v2 final)
 
 | seed | LGBM | XGB | Cal+Ensemble |
 |---|---|---|---|
@@ -745,9 +821,9 @@ post_{pk}       →  run run_postgame_sync(pk)
 | 2024 | 0.5482 | 0.5321 | 0.5376 |
 | 999 | 0.5347 | 0.5630 | 0.5419 |
 
-**8082경기 재학습 후 최종**: LGBM 0.5750 / XGB 0.5540 / **Cal 0.5640 ✅** (목표 0.56+ 통과)
+**8082경기 재학습 후 최종**: LGBM 0.5750 / XGB 0.5540 / **Cal 0.5640 ✅**
 
-### 14.4 다음 단계 권장 (향후 추가 향상)
+### 15.5 다음 단계 권장 (향후 추가 향상)
 
 | 방안 | 예상 효과 | 비용 |
 |---|---|---|
