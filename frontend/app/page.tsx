@@ -1178,10 +1178,24 @@ function ScreenSchedule() {
   })()
 
   const totalGames = mergedGames.length
-  const predTotal = summary?.total ?? 0
-  const graded = summary?.graded ?? 0
-  const correct = summary?.correct ?? 0
-  const accuracy = summary?.accuracy ?? null
+  const predTotal = mergedGames.filter((m:any)=>m.prediction).length
+
+  let _graded = 0, _correct = 0
+  mergedGames.forEach((item:any)=>{
+    const pred = item.prediction
+    if(!pred) return
+    const hs = pred?.home_score ?? item.home_score
+    const as_ = pred?.away_score ?? item.away_score
+    if(hs==null || as_==null) return
+    const homeWon = hs > as_
+    const pickHome = pred.home_win_prob >= 0.5
+    const ic = pred.is_correct ?? (homeWon===pickHome ? 1 : 0)
+    _graded++
+    if(ic===1) _correct++
+  })
+  const graded = _graded
+  const correct = _correct
+  const accuracy = graded>0 ? Math.round(correct/graded*1000)/10 : null
 
   return (
     <div className="view-enter schedule-page">
