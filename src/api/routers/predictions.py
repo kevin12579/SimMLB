@@ -1,5 +1,5 @@
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 try:
@@ -59,6 +59,7 @@ def _build_game_payload(pred: GamePrediction, game: Game, team_map: dict, sessio
         "game_pk": pred.game_pk,
         "home_team": team_map.get(game.home_team_id, ""),
         "away_team": team_map.get(game.away_team_id, ""),
+        "game_datetime": game.game_datetime.isoformat() if game.game_datetime else None,
         "home_win_prob": round(pred.home_win_prob, 3),
         "away_win_prob": round(pred.away_win_prob, 3),
         "confidence": pred.confidence_level,
@@ -97,14 +98,20 @@ async def get_today_predictions() -> dict:
     if cached:
         return json.loads(cached)
 
+    # KST 오늘(today) 경기 = MLB US 날짜 today-1로 저장됨
+    us_today = today - timedelta(days=1)
+
     with get_session() as session:
-        preds = session.query(GamePrediction).filter(
-            GamePrediction.prediction_date == today
-        ).all()
         team_map = {t.mlbam_team_id: t.abbreviation for t in session.query(Team).all()}
-        game_map = {
-            g.game_pk: g for g in session.query(Game).filter(Game.game_date == today).all()
-        }
+        games_today = session.query(Game).filter(Game.game_date == us_today).all()
+        game_map = {g.game_pk: g for g in games_today}
+        us_game_pks = list(game_map.keys())
+
+        preds = (
+            session.query(GamePrediction)
+            .filter(GamePrediction.game_pk.in_(us_game_pks))
+            .all()
+        ) if us_game_pks else []
 
         games_list = []
         for p in preds:
@@ -116,6 +123,76 @@ async def get_today_predictions() -> dict:
     result = {"date": today.isoformat(), "count": len(games_list), "games": games_list}
     await redis.setex(cache_key, 3600, json.dumps(result, default=_serialize))
     return result
+
+
+@router.get("/history")
+async def get_predictions_history(days: int = 7) -> dict:
+    """최근 N일 예측 이력 — ScreenHistory / ScreenModel 용."""
+    kst_today = datetime.now(_KST).date()
+    us_end = kst_today - timedelta(days=1)
+    us_start = kst_today - timedelta(days=days)
+
+    with get_session() as session:
+        team_map = {t.mlbam_team_id: t.abbreviation for t in session.query(Team).all()}
+        games = {
+            g.game_pk: g
+            for g in session.query(Game).filter(
+                Game.game_date >= us_start,
+                Game.game_date <= us_end,
+            ).all()
+        }
+        if not games:
+            return {"days": days, "total": 0, "graded": 0, "correct": 0,
+                    "accuracy": None, "brier": None, "rows": []}
+
+        preds = session.query(GamePrediction).filter(
+            GamePrediction.game_pk.in_(list(games.keys()))
+        ).all()
+
+        rows = []
+        for p in preds:
+            g = games.get(p.game_pk)
+            if not g:
+                continue
+            home = team_map.get(g.home_team_id, "")
+            away = team_map.get(g.away_team_id, "")
+            pick_home = p.home_win_prob >= 0.5
+            pick_team = home if pick_home else away
+            pick_prob = p.home_win_prob if pick_home else p.away_win_prob
+            rows.append({
+                "game_pk": p.game_pk,
+                "date": (g.game_date + timedelta(days=1)).isoformat(),
+                "game_datetime": g.game_datetime.isoformat() if g.game_datetime else None,
+                "home_team": home,
+                "away_team": away,
+                "home_score": g.home_score,
+                "away_score": g.away_score,
+                "status": g.status,
+                "home_win_prob": round(p.home_win_prob, 3),
+                "away_win_prob": round(p.away_win_prob, 3),
+                "confidence": p.confidence_level,
+                "is_correct": p.is_correct,
+                "pick_team": pick_team,
+                "pick_prob": round(pick_prob, 3),
+            })
+
+    graded = [r for r in rows if r["is_correct"] is not None]
+    correct = sum(1 for r in graded if r["is_correct"] == 1)
+    brier = None
+    if graded:
+        brier = round(
+            sum((r["pick_prob"] - r["is_correct"]) ** 2 for r in graded) / len(graded), 4
+        )
+
+    return {
+        "days": days,
+        "total": len(rows),
+        "graded": len(graded),
+        "correct": correct,
+        "accuracy": round(correct / len(graded) * 100, 1) if graded else None,
+        "brier": brier,
+        "rows": rows,
+    }
 
 
 @router.get("/{game_pk}")

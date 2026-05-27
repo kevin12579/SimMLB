@@ -74,6 +74,12 @@ async def archive_summary(target_date: str):
                 actual_winner = home if g.home_score > g.away_score else away
 
             is_correct = p.is_correct
+            # 파이프라인 채점 전이라도 스코어가 있으면 즉석 계산
+            if is_correct is None and has_result:
+                home_won = g.home_score > g.away_score
+                pick_home = p.home_win_prob >= 0.5
+                is_correct = 1 if (home_won == pick_home) else 0
+
             if is_correct is not None:
                 graded += 1
                 if is_correct == 1: correct += 1

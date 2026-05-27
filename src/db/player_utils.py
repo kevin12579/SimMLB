@@ -21,7 +21,7 @@ def ensure_players_exist(player_ids: set[int], session: Session) -> None:
     if not missing:
         return
     stubs = [
-        dict(mlbam_id=pid, full_name=f"Player #{pid}", position="UNK", status="unknown")
+        dict(mlbam_id=pid, full_name="TBD", position="UNK", status="unknown")
         for pid in missing
     ]
     session.execute(

@@ -99,7 +99,7 @@ function TM({ code, size='md' }:{code:string;size?:'xs'|'sm'|'md'|'lg'|'xl'}) {
 function Conf({level}:{level:string}) { return <span className={`conf conf-${level}`}>{level}</span> }
 function RC({v}:{v:number|null}) {
   if(v===null) return <span className="rc rc-pend">—</span>
-  return v===1 ? <span className="rc rc-hit">○ HIT</span> : <span className="rc rc-miss">✕ MISS</span>
+  return v===1 ? <span className="rc rc-hit">✓</span> : <span className="rc rc-miss">✗</span>
 }
 function PBar({home,h=7}:{home:number;h?:number}) {
   return <div className="prob-bar" style={{height:h,borderRadius:1}}><div className="a" style={{width:`${(1-home)*100}%`}}/><div className="h" style={{width:`${home*100}%`}}/></div>
@@ -1259,7 +1259,7 @@ function ScreenSchedule() {
                     <div className="schedule-pred">
                       {hasPrediction ? (<><div className="lbl">AI 예측</div><div className="cond pred-pick" style={{color:pickHome?'var(--navy)':'var(--red)'}}>{pickTeam} 승 <span>{pickProb!=null?(pickProb*100).toFixed(1):'—'}%</span></div><PBar home={pred.home_win_prob} h={7}/></>) : (<><div className="lbl">AI 예측</div><div className="cond pred-empty">예측 없음</div><div className="num" style={{fontSize:11,color:'var(--ink-4)'}}>MLB 일정만 표시</div></>)}
                     </div>
-                    <div className="schedule-result">{hasPrediction ? (<><Conf level={pred.confidence}/><RC v={isCorrect}/>{isCorrect===1&&<span className="schedule-check">✓</span>}</>) : (<span className="rc rc-pend">일정</span>)}</div>
+                    <div className="schedule-result">{hasPrediction ? (<><Conf level={pred.confidence}/><RC v={isCorrect}/></>) : (<span className="rc rc-pend">일정</span>)}</div>
                   </div>
                 )
               })}
@@ -1368,22 +1368,6 @@ function ScreenLive() {
     </div>
   )
 }
-
-/* ════════════════════════════════════
-   SCREEN: STANDINGS (순위표)
-════════════════════════════════════ */
-interface StandingEntry {
-  team_id:number; team_name:string; city:string; abbr:string
-  division:string; league:string; wins:number; losses:number; win_pct:number
-  gb:string; streak:string; home_w:number; home_l:number; away_w:number; away_l:number
-  l10_w:number; l10_l:number; rs:number; ra:number; div_rank:number; wc_rank:number; wc_gb:string
-}
-interface NewStandingsData {
-  AL: Record<string,StandingEntry[]>
-  NL: Record<string,StandingEntry[]>
-  wildcard: {AL:StandingEntry[];NL:StandingEntry[]}
-}
-
 
 /* ════════════════════════════════════
    SCREEN: STANDINGS

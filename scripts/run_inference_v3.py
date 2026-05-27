@@ -9,7 +9,7 @@ import asyncio
 import io
 import json
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 try:
     from zoneinfo import ZoneInfo
 except ImportError:
@@ -234,6 +234,7 @@ async def run_single(game_pk: int) -> None:
         ).on_conflict_do_update(
             index_elements=["game_pk"],
             set_=dict(
+                prediction_date=today,
                 home_win_prob=cal_p,
                 away_win_prob=round(1.0 - cal_p, 4),
                 confidence_level=_confidence(cal_p),
@@ -244,6 +245,20 @@ async def run_single(game_pk: int) -> None:
                 model_version="v2",
             ),
         )
+
+        # 선발 투수 실명 DB 반영 (stub → 실명)
+        for pid, name in [
+            (snap.get("home_starter_id"), h_starter_name),
+            (snap.get("away_starter_id"), a_starter_name),
+        ]:
+            if pid and name:
+                session.execute(
+                    text(
+                        "UPDATE players SET full_name=:n WHERE mlbam_id=:id"
+                        " AND (full_name='TBD' OR full_name LIKE 'Player #%')"
+                    ),
+                    {"n": name, "id": pid},
+                )
 
         session.execute(stmt)
         session.commit()
@@ -258,16 +273,16 @@ async def run_single(game_pk: int) -> None:
     )
 
     # 7) Redis 캐시 무효화
-    _invalidate_today_cache()
+    _invalidate_today_cache(today)
 
 
-def _invalidate_today_cache() -> None:
+def _invalidate_today_cache(today: date) -> None:
     try:
         import redis
         from config.settings import settings
 
         r = redis.from_url(f"redis://{settings.redis_host}:{settings.redis_port}")
-        r.delete("predictions:today")
+        r.delete(f"predictions:today:{today}")
     except Exception as e:
         logger.debug("Redis cache invalidate skipped: %s", e)
 
@@ -275,18 +290,20 @@ def _invalidate_today_cache() -> None:
 async def run_all_today(target_date: date | None = None) -> None:
     """폴백 모드 — 19:30 KST 일괄 추론."""
     today = target_date or datetime.now(ZoneInfo("Asia/Seoul")).date()
+    # KST 오늘 경기 = MLB US 날짜 today-1로 저장됨
+    us_today = today - timedelta(days=1)
 
     async with MLBStatsAPIClient() as client:
         with get_session() as session:
             await client.sync_teams(session)
 
         with get_session() as session:
-            await client.sync_schedule(today, session)
+            await client.sync_schedule(us_today, session)
             pks = [
                 g.game_pk
                 for g in session.query(Game)
                 .filter(
-                    Game.game_date == today,
+                    Game.game_date == us_today,
                     Game.status.notin_(["Final", "Postponed", "Cancelled"]),
                 )
                 .all()

@@ -143,7 +143,7 @@ class GameWeather(Base):
     __tablename__ = "game_weather"
 
     id           = Column(Integer, primary_key=True, autoincrement=True)
-    game_pk      = Column(Integer, ForeignKey("games.game_pk"), nullable=False)
+    game_pk      = Column(Integer, ForeignKey("games.game_pk"), nullable=False, unique=True)
     temp_f       = Column(Float)
     wind_speed_mph = Column(Float)
     wind_dir     = Column(String(10))
