@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -47,6 +47,7 @@ interface LiveData {
   runners:{first:boolean;second:boolean;third:boolean}
   home_team:string; away_team:string; home_name:string; away_name:string; venue:string
   pitchers?:{home_probable:string;away_probable:string;current:string;winner:string;loser:string}
+  live_home_prob?:number; play_event?:string; is_new_play?:boolean
 }
 interface UserInfo { username:string; user_id:number; total:number; graded:number; correct:number; accuracy:number|null; streak:number; by_conf:Record<string,{n:number;correct:number;acc:number|null}> }
 interface UserPickItem { id:number; game_pk:number; game_date:string; home_team:string; away_team:string; pick_team:string; pick_prob:number|null; confidence:string; is_correct:number|null }
@@ -1295,27 +1296,118 @@ function ScreenSchedule() {
   )
 }
 
+/* 타석 이벤트 → 한국어 변환 */
+const EVENT_KO: Record<string,string> = {
+  'Single':'안타!','Double':'2루타!','Triple':'3루타!','Home Run':'홈런!',
+  'Strikeout':'삼진','Walk':'볼넷','Groundout':'땅볼아웃','Flyout':'플라이아웃',
+  'Lineout':'라인드라이브아웃','Pop Out':'내야플라이','Double Play':'병살타!',
+  'Triple Play':'삼중살!','Sac Fly':'희생플라이','Sac Bunt':'희생번트',
+  'Field Error':'에러','Hit By Pitch':'몸에 맞는 공','Intent Walk':'고의사구',
+  'Passed Ball':'패스트볼','Wild Pitch':'폭투','Balk':'보크',
+  'Stolen Base 2B':'도루!','Stolen Base 3B':'도루!','Stolen Base Home':'홈도루!!',
+  'Caught Stealing 2B':'도루실패','Caught Stealing 3B':'도루실패',
+}
+const toKoEvent=(e:string)=>EVENT_KO[e]||(e||'')
+
+/* 이벤트 플래시가 인상적인 이벤트 목록 */
+const EXCITING = new Set(['Home Run','Triple','Double Play','Triple Play','Stolen Base Home'])
+
+const VENUE_SHORT: Record<string,string> = {
+  'Oriole Park at Camden Yards':'Camden Yards',
+  'Guaranteed Rate Field':'Guaranteed Rate',
+  'American Family Field':'Am. Family Field',
+  'loanDepot park':'loanDepot Park',
+  'Angel Stadium of Anaheim':'Angel Stadium',
+  'Oakland Coliseum':'Coliseum',
+  'T-Mobile Park':'T-Mobile Park',
+  'Busch Stadium':'Busch Stadium',
+  'Tropicana Field':'Tropicana Field',
+}
+function shortVenue(v:string) { return VENUE_SHORT[v] || v }
+
 function ScreenLive() {
   const [data,setData]=useState<TodayData|null>(null)
   const [lives,setLives]=useState<Record<number,LiveData>>({})
   const [loading,setLoading]=useState(true)
   const [filter,setFilter]=useState<'ALL'|'Live'|'Preview'|'Final'>('ALL')
+  const [sseConnected,setSseConnected]=useState<Record<number,boolean>>({})
+  const [flashEvent,setFlashEvent]=useState<Record<number,string>>({})
+  const prevProbs=useRef<Record<number,number>>({})
+  const [probDeltas,setProbDeltas]=useState<Record<number,number>>({})
 
+  // 초기 경기 목록 + 60초 폴백 폴링 (예정/종료 경기용)
   useEffect(()=>{
     fetch(`${API}/predictions/today`).then(r=>r.json()).then((d:TodayData)=>{setData(d);setLoading(false)}).catch(()=>setLoading(false))
   },[])
 
+  // 최초 REST 스냅샷 + 60초 폴링 (SSE 미연결 경기 대상)
   useEffect(()=>{
     if(!data?.games) return
     const fetchAll=()=>{
       data.games.forEach(g=>{
-        fetch(`${API}/live/game/${g.game_pk}`).then(r=>r.json()).then(d=>setLives(prev=>({...prev,[g.game_pk]:d}))).catch(()=>{})
+        if(sseConnected[g.game_pk]) return  // SSE 연결된 경기는 스킵
+        fetch(`${API}/live/game/${g.game_pk}`).then(r=>r.json()).then(d=>{
+          setLives(prev=>({...prev,[g.game_pk]:d}))
+          const np=d.live_home_prob as number|undefined
+          if(np!=null){const op=prevProbs.current[g.game_pk];if(op!=null&&Math.abs(np-op)>0.001)setProbDeltas(prev=>({...prev,[g.game_pk]:np-op}));prevProbs.current[g.game_pk]=np}
+        }).catch(()=>{})
       })
     }
     fetchAll()
-    const t=setInterval(fetchAll,10000)
+    const t=setInterval(fetchAll,60000)
     return ()=>clearInterval(t)
-  },[data])
+  },[data,sseConnected])
+
+  // 진행 중 경기에 SSE 구독
+  useEffect(()=>{
+    if(!data?.games) return
+    const liveGamePks = data.games
+      .filter(g=>lives[g.game_pk]?.status==='Live'||(!lives[g.game_pk]))
+      .map(g=>g.game_pk)
+
+    const srcs: Record<number,EventSource> = {}
+    liveGamePks.forEach(pk=>{
+      if(sseConnected[pk]) return
+      const es = new EventSource(`${API}/live/stream/${pk}`)
+      es.onmessage=(e)=>{
+        try {
+          const msg = JSON.parse(e.data)
+          if(msg.type==='connected') { setSseConnected(prev=>({...prev,[pk]:true})); return }
+          // SSE 데이터로 lives 업데이트
+          setLives(prev=>{
+            const cur = prev[pk] || {} as LiveData
+            return {...prev,[pk]:{
+              ...cur,
+              status: msg.status,
+              inning_state: msg.half==='top'?'Top':'Bottom',
+              current_inning: msg.inning,
+              outs: msg.outs,
+              balls: msg.balls,
+              strikes: msg.strikes,
+              runs:{home:msg.home_score,away:msg.away_score},
+              runners:{first:!!msg.on1,second:!!msg.on2,third:!!msg.on3},
+              live_home_prob: msg.live_home_prob,
+              play_event: msg.play_event,
+              is_new_play: msg.is_new_play,
+            }}
+          })
+          const _np=msg.live_home_prob as number|undefined
+          if(_np!=null){const _op=prevProbs.current[pk];if(_op!=null&&Math.abs(_np-_op)>0.001)setProbDeltas(prev=>({...prev,[pk]:_np-_op}));prevProbs.current[pk]=_np}
+          // 새 타석 이벤트 플래시
+          if(msg.is_new_play && msg.play_event) {
+            setFlashEvent(prev=>({...prev,[pk]:msg.play_event}))
+            setTimeout(()=>setFlashEvent(prev=>({...prev,[pk]:''})),3000)
+          }
+        } catch {}
+      }
+      es.onerror=()=>{
+        setSseConnected(prev=>({...prev,[pk]:false}))
+        es.close()
+      }
+      srcs[pk]=es
+    })
+    return ()=>{ Object.values(srcs).forEach(es=>es.close()) }
+  },[data,lives])
 
   const games=data?.games??[]
   const liveGames=games.filter(g=>lives[g.game_pk]?.status==='Live')
@@ -1345,7 +1437,9 @@ function ScreenLive() {
         {([['ALL','전체',games.length],['Live','진행 중',liveGames.length],['Preview','예정',previewGames.length],['Final','종료',finalGames.length]] as const).map(([f,l,c])=>(
           <button key={f} className={`chip ${filter===f?'active':''}`} onClick={()=>setFilter(f as any)}>{l}<span className="ct">{c}</span></button>
         ))}
-        <span style={{marginLeft:'auto',fontFamily:'var(--f-mono)',fontSize:12,color:'var(--ink-2)',fontWeight:700}}>10초마다 자동 갱신</span>
+        <span style={{marginLeft:'auto',fontFamily:'var(--f-mono)',fontSize:12,color:'var(--ink-2)',fontWeight:700}}>
+          {liveGames.length>0?'⚡ 실시간 자동 업데이트':'🔄 60초마다 자동 갱신'}
+        </span>
       </div>
 
       {loading&&<Spinner/>}
@@ -1354,34 +1448,94 @@ function ScreenLive() {
       {!loading&&games.length>0&&(
         <div className="live-board">
           <div className="live-table-head">
-            {['시각','원정팀','스코어','홈팀','AI 예측','상태'].map((h,i)=><div key={i} className="num" style={{textAlign:i===2?'center':i>=4?'center':'left'}}>{h}</div>)}
+            {['⏱ 시각 · 구장','✈ 원정팀 (Away)','⚾ 점수','🏠 홈팀 (Home)','🤖 AI 승리 예측','📊 경기 현황'].map((h,i)=><div key={i} className="num" style={{textAlign:i===2?'center':i>=4?'center':'left'}}>{h}</div>)}
           </div>
           {Object.entries(grouped).map(([groupName, groupGames])=>(
             <div key={groupName}>
-              <div className="live-group-head">{groupName==='진행 중'&&<span className="live-group-dot"/>}<span>{groupName}</span><em>{groupGames.length}경기</em></div>
+              <div className="live-group-head">
+                {groupName==='진행 중'&&<span className="live-group-dot"/>}
+                <span>{groupName==='진행 중'?'⚾ 진행 중':groupName==='예정'?'⏰ 예정':groupName==='종료'?'✅ 종료':groupName}</span>
+                <em>{groupGames.length}경기</em>
+              </div>
               {groupGames.map(g=>{
                 const ld=lives[g.game_pk]
                 const isLive=ld?.status==='Live'
                 const isFinal=ld?.status==='Final'
                 const hasScore=ld?.runs!=null
-                const pickHome=g.home_win_prob>=.5
+                const liveProb=ld?.live_home_prob
+                const displayHomeProb = isLive && liveProb!=null ? liveProb : g.home_win_prob
+                const displayAwayProb = 1 - displayHomeProb
+                const pickHome=displayHomeProb>=.5
                 const pickTeam=pickHome?g.home_team:g.away_team
-                const pct=(Math.max(g.home_win_prob,g.away_win_prob)*100).toFixed(1)
+                const pct=(Math.max(displayHomeProb,displayAwayProb)*100).toFixed(1)
                 const homeWinning=!!(hasScore&&ld.runs.home>ld.runs.away)
                 const awayWinning=!!(hasScore&&ld.runs.away>ld.runs.home)
                 const kstTime=formatKstTime(g.game_datetime)
                 const inning=inningLabel(ld)
+                const flash=flashEvent[g.game_pk]
+                const isExciting=flash&&EXCITING.has(flash)
+                const delta=probDeltas[g.game_pk]
+                const baseChg=isLive&&liveProb!=null&&g.home_win_prob!=null?liveProb-g.home_win_prob:null
                 return (
-                  <div key={g.game_pk} className="live-game-row">
+                  <div key={g.game_pk} className="live-game-row" style={{position:'relative'}}>
+                    {/* 이벤트 플래시 배너 */}
+                    {flash&&(
+                      <div style={{
+                        position:'absolute',top:0,left:0,right:0,bottom:0,
+                        display:'flex',alignItems:'center',justifyContent:'center',
+                        pointerEvents:'none',zIndex:10,
+                      }}>
+                        <span style={{
+                          fontFamily:'var(--f-cond)',fontWeight:700,
+                          fontSize:isExciting?22:16,letterSpacing:'.06em',
+                          color:isExciting?'var(--amber)':'var(--ink-1)',
+                          background:'rgba(0,0,0,.72)',
+                          padding:isExciting?'6px 18px':'4px 14px',
+                          borderRadius:'var(--r-sm)',
+                          animation:'flash-in .2s ease',
+                          border:isExciting?'1.5px solid var(--amber)':'none',
+                        }}>{toKoEvent(flash)}</span>
+                      </div>
+                    )}
                     <div className="live-time-cell">
-                      {isLive?<span className="live-badge"><span className="live-badge-dot"/>LIVE</span>:<span className="num live-time">{kstTime}</span>}
-                      {isLive&&inning&&<span className="live-inning-now">{inning}</span>}
+                      {isLive
+                        ? <span className="live-inning-now">⚾ {inning||'진행 중'}</span>
+                        : isFinal
+                        ? <><span className="num live-time">{kstTime}</span><span style={{fontFamily:'var(--f-mono)',fontSize:11,fontWeight:800,color:'var(--ink-4)',marginTop:1}}>경기 종료</span></>
+                        : <span className="num live-time">{kstTime}</span>
+                      }
+                      {ld?.venue&&<span className="live-venue">🏟 {shortVenue(ld.venue)}</span>}
                     </div>
-                    <div className="live-team away"><TM code={g.away_team} size="md"/><div><div className="live-team-code" style={{opacity:isFinal&&homeWinning?.62:1}}>{g.away_team}</div><div className="live-team-name">{TEAMS[g.away_team]?.city} {TEAMS[g.away_team]?.name}</div>{isLive&&ld&&<div className="live-mini"><span>H {ld.hits.away}</span><span>E {ld.errors.away}</span></div>}{isFinal&&ld?.pitchers?.loser&&!homeWinning&&<div className="live-pitcher win">{getLastName(ld.pitchers.winner)}</div>}{isFinal&&ld?.pitchers?.loser&&homeWinning&&<div className="live-pitcher loss">{getLastName(ld.pitchers.loser)}</div>}{!isFinal&&ld?.pitchers?.away_probable&&<div className="live-pitcher start">{getLastName(ld.pitchers.away_probable)}</div>}</div></div>
-                    <div className="live-score-cell">{hasScore?(<><span className={`live-score-num ${awayWinning?'win':''}`}>{ld.runs.away}</span><span className="live-score-mid">-</span><span className={`live-score-num ${homeWinning?'win':''}`}>{ld.runs.home}</span>{isLive&&ld&&<div className="live-outs">{[0,1,2].map(i=><span key={i} className={i<ld.outs?'on':''}/>)}</div>}</>):<span className="live-vs">vs</span>}</div>
-                    <div className="live-team home"><div><div className="live-team-code" style={{opacity:isFinal&&awayWinning?.62:1}}>{g.home_team}</div><div className="live-team-name">{TEAMS[g.home_team]?.city} {TEAMS[g.home_team]?.name}</div>{isLive&&ld&&<div className="live-mini right"><span>H {ld.hits.home}</span><span>E {ld.errors.home}</span></div>}{isFinal&&ld?.pitchers?.winner&&homeWinning&&<div className="live-pitcher win">{getLastName(ld.pitchers.winner)}</div>}{isFinal&&ld?.pitchers?.loser&&!homeWinning&&<div className="live-pitcher loss">{getLastName(ld.pitchers.loser)}</div>}{!isFinal&&ld?.pitchers?.home_probable&&<div className="live-pitcher start">{getLastName(ld.pitchers.home_probable)}</div>}</div><TM code={g.home_team} size="md"/></div>
-                    <div className="live-pred"><div className="cond" style={{color:pickHome?'var(--navy)':'var(--red)'}}>{pickTeam} <span>{pct}%</span></div><PBar home={g.home_win_prob} h={6}/></div>
-                    <div className="live-status"><Conf level={g.confidence}/>{isLive&&ld?<Diamond runners={ld.runners}/>:<span>{isFinal?'종료':'예정'}</span>}</div>
+                    <div className="live-team away"><TM code={g.away_team} size="lg"/><div><div className="live-team-code" style={{opacity:isFinal&&homeWinning?.55:1}}>{g.away_team}</div><div className="live-team-name">{TEAMS[g.away_team]?.city} {TEAMS[g.away_team]?.name}</div>{isLive&&ld&&<div className="live-mini"><span>🥎 안타 {ld.hits.away}</span><span>⚠ 실책 {ld.errors.away}</span></div>}{isFinal&&ld?.pitchers?.loser&&!homeWinning&&<div className="live-pitcher win">🏆 {getLastName(ld.pitchers.winner)}</div>}{isFinal&&ld?.pitchers?.loser&&homeWinning&&<div className="live-pitcher loss">{getLastName(ld.pitchers.loser)}</div>}{!isFinal&&ld?.pitchers?.away_probable&&<div className="live-pitcher start">🎯 {getLastName(ld.pitchers.away_probable)}</div>}</div></div>
+                    <div className="live-score-cell">{hasScore?(<><span className={`live-score-num ${awayWinning?'win':''}`}>{ld.runs.away}</span><span className="live-score-mid">:</span><span className={`live-score-num ${homeWinning?'win':''}`}>{ld.runs.home}</span>{isLive&&ld&&<div className="live-outs"><span className="live-outs-lbl">아웃</span>{[0,1,2].map(i=><span key={i} className={i<ld.outs?'on':''}/>)}</div>}</>):<span className="live-vs">vs</span>}</div>
+                    <div className="live-team home"><div><div className="live-team-code" style={{opacity:isFinal&&awayWinning?.55:1}}>{g.home_team}</div><div className="live-team-name">{TEAMS[g.home_team]?.city} {TEAMS[g.home_team]?.name}</div>{isLive&&ld&&<div className="live-mini right"><span>🥎 안타 {ld.hits.home}</span><span>⚠ 실책 {ld.errors.home}</span></div>}{isFinal&&ld?.pitchers?.winner&&homeWinning&&<div className="live-pitcher win">🏆 {getLastName(ld.pitchers.winner)}</div>}{isFinal&&ld?.pitchers?.loser&&!homeWinning&&<div className="live-pitcher loss">{getLastName(ld.pitchers.loser)}</div>}{!isFinal&&ld?.pitchers?.home_probable&&<div className="live-pitcher start">🎯 {getLastName(ld.pitchers.home_probable)}</div>}</div><TM code={g.home_team} size="lg"/></div>
+                    <div className="live-pred">
+                      <div style={{display:'flex',alignItems:'center',justifyContent:'center',gap:6}}>
+                        <div className="cond" style={{color:pickHome?'var(--navy)':'var(--red)',transition:'color .3s'}}>
+                          {pickTeam} 승 <span style={{fontWeight:900}}>{pct}%</span>
+                        </div>
+                        {isLive&&delta!=null&&Math.abs(delta)>0.001&&(
+                          <span className={`prob-delta ${delta>0?'up':'down'}`}>{delta>0?'▲ +':'▼ -'}{(Math.abs(delta)*100).toFixed(1)}%p</span>
+                        )}
+                      </div>
+                      <PBar home={displayHomeProb} h={6}/>
+                      {isLive&&liveProb!=null&&g.home_win_prob!=null&&(
+                        <div style={{fontSize:11,color:'var(--ink-3)',marginTop:3,fontFamily:'var(--f-mono)',textAlign:'center',fontWeight:600}}>
+                          예측 {(g.home_win_prob*100).toFixed(1)}%
+                          {baseChg!=null&&Math.abs(baseChg)>0.002&&<span style={{marginLeft:5,fontWeight:800,fontSize:12,color:baseChg>0?'var(--green)':'var(--red)'}}>{baseChg>0?'↑+':'↓-'}{(Math.abs(baseChg)*100).toFixed(1)}%p</span>}
+                        </div>
+                      )}
+                    </div>
+                    <div className="live-status">
+                      <Conf level={g.confidence}/>
+                      {isLive&&ld
+                        ? <>
+                            <div style={{textAlign:'center',fontFamily:'var(--f-mono)',fontSize:11,color:'var(--ink-4)',fontWeight:700,letterSpacing:'.06em'}}>주루 현황</div>
+                            <Diamond runners={ld.runners}/>
+                          </>
+                        : <span>{isFinal?'✅ 최종':'⏰ 대기 중'}</span>
+                      }
+                    </div>
                   </div>
                 )
               })}

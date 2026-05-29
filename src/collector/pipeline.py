@@ -140,14 +140,14 @@ def start_live_poller(game_pk: int) -> None:
     sched = _get_global_scheduler()
     sched.add_job(
         _live_poll_tick,
-        IntervalTrigger(minutes=1),
+        IntervalTrigger(seconds=30),
         args=[game_pk],
         id=f"live_{game_pk}",
         replace_existing=True,
         max_instances=1,
-        misfire_grace_time=30,
+        misfire_grace_time=15,
     )
-    logger.info("[live_poller] game %d 1분 polling 시작", game_pk)
+    logger.info("[live_poller] game %d 30초 polling 시작", game_pk)
 
 
 def _live_poll_tick(game_pk: int) -> None:

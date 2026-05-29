@@ -1,5 +1,7 @@
+import asyncio
 import json
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
+from fastapi.responses import StreamingResponse
 import aiohttp
 import redis.asyncio as aioredis
 from config.settings import settings
@@ -7,11 +9,17 @@ from config.settings import settings
 router = APIRouter()
 
 _redis: aioredis.Redis | None = None
-def _get_redis():
+
+
+def _get_redis() -> aioredis.Redis:
     global _redis
     if _redis is None:
-        _redis = aioredis.from_url(f"redis://{settings.redis_host}:{settings.redis_port}", decode_responses=True)
+        _redis = aioredis.from_url(
+            f"redis://{settings.redis_host}:{settings.redis_port}",
+            decode_responses=True,
+        )
     return _redis
+
 
 @router.get("/game/{game_pk}")
 async def get_live_game(game_pk: int):
@@ -76,5 +84,58 @@ async def get_live_game(game_pk: int):
         },
     }
 
+    # 폴러가 저장한 최신 live_home_prob 조회 (없으면 생략)
+    live_prob_raw = await redis.get(f"live_prob:{game_pk}")
+    if live_prob_raw:
+        result["live_home_prob"] = float(live_prob_raw)
+
     await redis.setex(cache_key, 10, json.dumps(result))
     return result
+
+
+@router.get("/stream/{game_pk}")
+async def stream_live(game_pk: int, request: Request):
+    """SSE 엔드포인트 — Redis pub/sub live:{game_pk} 채널을 구독해 프론트에 push."""
+    async def event_generator():
+        r = _get_redis()
+        pubsub = r.pubsub()
+        await pubsub.subscribe(f"live:{game_pk}")
+        try:
+            yield f"data: {json.dumps({'type': 'connected', 'game_pk': game_pk})}\n\n"
+            last_heartbeat = asyncio.get_event_loop().time()
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    msg = await asyncio.wait_for(
+                        pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0),
+                        timeout=2.0,
+                    )
+                except asyncio.TimeoutError:
+                    msg = None
+
+                if msg and msg.get("type") == "message":
+                    yield f"data: {msg['data']}\n\n"
+                    last_heartbeat = asyncio.get_event_loop().time()
+
+                # 30초마다 keepalive
+                now = asyncio.get_event_loop().time()
+                if now - last_heartbeat > 30:
+                    yield ": heartbeat\n\n"
+                    last_heartbeat = now
+
+        except asyncio.CancelledError:
+            pass
+        finally:
+            await pubsub.unsubscribe(f"live:{game_pk}")
+            await pubsub.aclose()
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
