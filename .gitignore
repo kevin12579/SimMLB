@@ -47,3 +47,6 @@ guide/
 claude.md
 .claude/
 logs/
+
+# 개인 문서 (로컬 전용)
+DEPLOY.md
