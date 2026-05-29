@@ -1,10 +1,12 @@
-# ⚾ SimMLB — MLB 승부예측 AI 시스템 (v2.1)
+# ⚾ SimMLB — MLB 승부예측 AI 시스템 (v2.2)
 
-MLB 정규시즌 경기의 **홈팀 승리 확률을 ML 모델로 예측**하고, GPT-4o-mini가 **한국어 분석 근거를 자동 생성**하며, 경기 진행 중 **라이브 스코어와 라이브 승률**을 1분 간격으로 업데이트하는 풀스택 AI 시스템.
+MLB 정규시즌 경기의 **홈팀 승리 확률을 ML 모델로 예측**하고, GPT-4o-mini가 **한국어 분석 근거를 자동 생성**하며, 경기 진행 중 **SSE(Server-Sent Events)로 실시간 승률 변동을 push**하는 풀스택 AI 시스템.
 
 > **v2 업데이트 (2026-05-21)** — 47개 피처(라인업 9명 Statcast + 선발투수 velo/spin/whiff + 휴식일 + dWAR) · 8,082경기 학습 · MLB Live Feed 통합 · 동적 스케줄러 · 라이브 polling · 자동 postgame 수집.
 >
 > **v2.1 패치 (2026-05-27)** — KST/ET 날짜 버그 다수 수정 · `/predictions/history` 신규 · 경기일정 ✓/✗ 아이콘 · 선수명 TBD 일괄 수정 · archive on-the-fly 채점 · park_factor 수집기 추가.
+>
+> **v2.2 패치 (2026-05-29)** — SSE 실시간 승률 push · 라이브 승률 변동 인디케이터(▲/▼) · 라이브탭 UI 전면 직관화 · 전역 폰트 대형화 · 구장 정보 표시.
 
 ---
 
@@ -13,6 +15,7 @@ MLB 정규시즌 경기의 **홈팀 승리 확률을 ML 모델로 예측**하고
 1. [프로젝트 개요](#1-프로젝트-개요)
 2. [v2 주요 업데이트](#2-v2-주요-업데이트-2026-05-21)
 3. [v2.1 패치노트](#3-v21-패치노트-2026-05-27)
+   - [3.1 v2.2 패치노트](#31-v22-패치노트-2026-05-29)
 4. [시스템 파이프라인](#4-시스템-파이프라인)
 5. [데이터 수집 방식](#5-데이터-수집-방식)
 6. [피처 엔지니어링](#6-피처-엔지니어링)
@@ -39,7 +42,7 @@ MLB 정규시즌 경기의 **홈팀 승리 확률을 ML 모델로 예측**하고
 | 모델 | LightGBM + XGBoost + Isotonic | 동일 (Optuna 100 trials, seed 고정) |
 | 최종 AUC | 0.5336 (앙상블) | **0.5640** (앙상블) / **0.5750** (LGBM 단독) |
 | 데이터 수집 | 수동 CSV / 일별 cron | **자동 스텔스 스크래퍼 + 동적 스케줄러** |
-| 라이브 기능 | 없음 | **1분 polling + 라이브 win prob + Final 자동 postgame** |
+| 라이브 기능 | 없음 | **30초 polling + SSE 실시간 push + 승률 변동 ▲/▼ + Final 자동 postgame** |
 | LLM | GPT-4o-mini, SHAP 한국어 2~3문장 | 동일 |
 | 인프라 | Render + Vercel | 동일 |
 
@@ -96,6 +99,33 @@ MLB 정규시즌 경기의 **홈팀 승리 확률을 ML 모델로 예측**하고
 | **경기일정 5분 자동 갱신** | 오늘 날짜 선택 시 5분 간격 자동 재조회. 경기 종료 후 최대 5분 내 결과 반영 |
 | **`run_startup_catchup()`** | 스케줄러 시작 시 당일 Final 경기 즉시 `update_game_results` 실행 + Redis 캐시 삭제. 진행 중 경기는 라이브 폴러 즉시 등록 |
 | **HIGH 신뢰도 기준 완화** | `60%+` (종전 65%+)로 변경. `_confidence()` diff 임계값 `0.15 → 0.10` |
+
+---
+
+## 3.1 v2.2 패치노트 (2026-05-29)
+
+### 신규 기능
+
+| 기능 | 설명 |
+|---|---|
+| **SSE 실시간 승률 push** | `GET /live/stream/{pk}` — Redis `live:{pk}` pub/sub 채널 구독 → 타석 결과 발생 시 `data: {...}\n\n` 스트리밍. 30초 keepalive heartbeat |
+| **승률 변동 인디케이터** | 라이브 탭에서 `▲ +1.5%p` (초록) / `▼ -2.1%p` (빨강) pill 배지 실시간 표시. `prevProbs` ref로 이전 값 추적, 0.1%p 이상 변동 시 갱신 |
+| **사전 예측 대비 총 변동** | 경기 중 `예측 58.1% ↑+4.2%p` 형태로 pre-game 예측 대비 현재 변동폭 표시 |
+| **`live_home_prob` REST 공급** | 폴러가 `live_prob:{pk}` Redis key(TTL 120s)에 최신 승률 저장 → `/live/game/{pk}` 응답에 포함. SSE 미연결 시에도 60초 REST 폴링으로 승률 갱신 |
+| **구장 정보 표시** | `/live/game/{pk}` 응답의 `venue` 필드를 라이브 탭 시각 셀에 🏟 아이콘과 함께 표시. 긴 구장명 자동 약칭 처리(`shortVenue`) |
+| **라이브 탭 전면 직관화** | 컬럼 헤더 이모지+한국어 (⚾ 점수, 🤖 AI 승리 예측), H/E → 🥎 안타/⚠ 실책, 아웃 도트에 '아웃' 레이블, 주루 다이아몬드 '주루 현황' 레이블 |
+| **행별 LIVE 배지 제거** | 진행 중 그룹 헤더로 통일 (⚾ 진행 중 / ⏰ 예정 / ✅ 종료), 각 행의 중복 LIVE 배지 삭제 |
+| **전역 폰트 대형화** | kicker 9.5→11px, lbl 9.5→11px, chip 12.5→14px, conf 11→13px, page-title 34→38px, 점수 29→40px, 팀코드 24→28px, AI예측 16→20px |
+
+### 변경 파일
+
+| 파일 | 변경 내용 |
+|---|---|
+| `src/collector/live_score_poller.py` | Live Feed 전환 (`/linescore` → `/feed/live`), `_last_play_ids` play 추적, `redis.setex live_prob:{pk}` 추가, Redis payload에 play_event/desc/runners 포함 |
+| `src/collector/pipeline.py` | 폴링 주기 1분 → **30초**, misfire_grace_time 30→15s |
+| `src/api/routers/live.py` | `GET /live/stream/{pk}` SSE 엔드포인트 신규, `/live/game/{pk}` 응답에 `live_home_prob` 추가 |
+| `frontend/app/page.tsx` | `useRef` 추가, `prevProbs`/`probDeltas` state, SSE + REST 양방향 delta 추적, 라이브 탭 UI 전면 개편, `shortVenue` 함수, 구장 표시 |
+| `frontend/app/globals.css` | `.prob-delta` 클래스 신규, 라이브 보드 전체 폰트 상향, 전역 kicker/lbl/chip/conf 크기 조정 |
 
 ---
 
@@ -373,29 +403,68 @@ DB game_predictions.reasoning_text 저장
 
 ---
 
-## 9. 라이브 스코어 + 라이브 예측 (v2 신규)
+## 9. 라이브 스코어 + 실시간 승률 (v2 신규 / v2.2 SSE 강화)
 
 ### 9.1 라이브 폴러 (`src/collector/live_score_poller.py`)
 
-경기 시작(T+0) 시점에 BackgroundScheduler가 IntervalTrigger(1분)로 자가 종료형 잡 등록:
+경기 시작(T+0) 시점에 BackgroundScheduler가 IntervalTrigger(**30초**)로 자가 종료형 잡 등록:
 
 ```
-매 분마다:
-  GET /api/v1/game/{pk}/linescore        (작은 응답 ~1KB)
+매 30초마다:
+  GET /api/v1.1/game/{pk}/feed/live      (Live Feed — 타석 이벤트 포함)
    → inning, half, outs, balls/strikes, home/away score, on1/2/3
+   → play_event (Single, Home Run ...), play_desc
    → MLB winProbability (제공 시)
   ↓
-  base_prob = game_predictions.home_win_prob (T-15에 저장된 pre-game)
+  base_prob = game_predictions.home_win_prob  (T-15 pre-game 예측)
   live_prob = live_win_prob_adjuster(base_prob, state, mlb_wp)
   ↓
   INSERT INTO game_live_states (시계열 이력)
   UPDATE game_predictions.live_* (최신 스냅샷)
-  Redis publish live:{pk}                 (SSE/WebSocket 푸시 시드)
+  Redis SETEX live_prob:{pk} 120s str(live_prob)   ← REST 엔드포인트용
+  Redis PUBLISH live:{pk} JSON payload              ← SSE 프론트 push
   ↓
   status == "Final" 감지 시 → 자기 자신 제거 + postgame_sync 트리거
 ```
 
-### 9.2 라이브 승률 계산 (`src/ml/live_win_prob.py`)
+**타석 이벤트 감지**: `_last_play_ids` 딕셔너리로 이전 `play_id` 추적 → `play_id` 변경 시만 `is_new_play: true` 플래그.
+
+### 9.2 SSE 엔드포인트 (`src/api/routers/live.py`)
+
+```
+GET /live/stream/{game_pk}
+  → Redis SUBSCRIBE live:{game_pk}
+  → 새 이벤트 수신 시 data: {...}\n\n 스트리밍
+  → 30초마다 ": heartbeat\n\n" keepalive
+  → 클라이언트 disconnect 감지 후 UNSUBSCRIBE + aclose
+
+GET /live/game/{game_pk}
+  → Redis live_game:{pk} 캐시 조회 (TTL 10s)
+  → miss 시 MLB Live Feed API 직접 호출
+  → Redis live_prob:{pk} 조회하여 live_home_prob 필드 포함
+```
+
+### 9.3 프론트엔드 실시간 구독 (`frontend/app/page.tsx`)
+
+```
+진행 중 경기:
+  EventSource → /live/stream/{pk} 구독
+  SSE 메시지 수신 시:
+    lives[pk] 업데이트 (score, inning, runners, live_home_prob)
+    prevProbs ref와 비교 → 0.1%p 이상 변동 시 probDeltas 업데이트
+    is_new_play=true 시 3초 이벤트 플래시 (홈런 등 exciting 이벤트 황금색)
+
+예정/종료 경기:
+  60초 REST 폴링 → /live/game/{pk}
+  live_home_prob 수신 → prevProbs 비교 → delta 계산
+
+승률 변동 표시:
+  ▲ +1.5%p (초록 pill) — 홈팀 승률 상승
+  ▼ -2.1%p (빨강 pill) — 홈팀 승률 하락
+  하단 소문자: 예측 58.1% ↑+4.2%p (사전 예측 대비 총 변동)
+```
+
+### 9.4 라이브 승률 계산 (`src/ml/live_win_prob.py`)
 
 별도 in-game 모델을 학습하지 않고 다음 우선순위:
 
@@ -403,7 +472,7 @@ DB game_predictions.reasoning_text 저장
 2. **Tom Tango "The Book" 룩업 테이블** — (inning, lead) → 홈 승률
 3. **베이스 가중평균** — 룩업 없으면 진행도(inning/9)에 따라 base ↔ 0.5 감쇠
 
-### 9.3 자동 postgame 수집 (`src/collector/postgame_collector.py`)
+### 9.5 자동 postgame 수집 (`src/collector/postgame_collector.py`)
 
 라이브 폴러가 `status=Final` 감지 시 즉시(T+5min) 호출:
 
@@ -634,6 +703,8 @@ poetry run python scripts/build_and_train_v2.py --features v2
 | GET | `/games/{game_pk}` | 특정 경기 기본 정보 |
 | GET | `/archive/summary` | 날짜별 예측 결과 요약 (`?target_date=YYYY-MM-DD`) |
 | GET | `/archive/calendar` | 월별 달력 데이터 (`?year=2026&month=5`) |
+| GET | `/live/game/{game_pk}` | 🆕 v2.2: 라이브 스냅샷 (MLB Feed + `live_home_prob`, Redis 10s 캐시) |
+| GET | `/live/stream/{game_pk}` | 🆕 v2.2: SSE 스트림 (Redis `live:{pk}` pub/sub → EventStream) |
 
 ### 응답 예시 (`/predictions/today`)
 
@@ -809,12 +880,23 @@ game_live_states (1분 polling 시계열 — 차트용)
 | **스케줄러 시작 후 is_correct null** | 스케줄러 없이 종료된 경기는 아침 파이프라인 전까지 미채점 | `run_startup_catchup()` + 프론트 on-the-fly 즉석 계산으로 즉시 표시 |
 | **HIGH 신뢰도 n=0** | HIGH 임계값 65%(diff>0.15)로 설정 → 오늘 최고 62.4%가 MED로 분류 | `_confidence()` 임계값 `0.10`(60%+)으로 완화 |
 
-### 15.3 라이브 폴러 잡 ID 충돌 방지
+### 15.3 v2.2 라이브 SSE 구현 시 이슈
+
+| 이슈 | 원인 | 해결 |
+|---|---|---|
+| **라이브 승률이 pre-game 값에서 안 바뀜** | `/live/game/{pk}` REST 응답에 `live_home_prob` 필드 없음 — 프론트가 항상 사전 예측값을 표시 | 폴러가 `live_prob:{pk}` Redis key에 SETEX(120s)로 최신값 저장 → REST 엔드포인트에서 해당 키 읽어 응답에 포함 |
+| **▲/▼ 인디케이터가 한 번도 안 뜸** | `prevProbs.current[pk]`가 초기화 전이라 비교 불가 — `live_home_prob`가 없으면 첫 폴에서 이전값도 없음 | 위 REST 픽스로 첫 폴부터 값이 들어와 두 번째 폴에서 delta 계산 시작 |
+| **캐시된 응답에 `live_home_prob` 없음** | 구 uvicorn 프로세스가 포트 8000을 점유 — 코드 수정 전 응답이 캐시됨 | 구 uvicorn 프로세스 전체 종료(`netstat -ano` + `Stop-Process`) 후 신규 기동 |
+| **구 uvicorn이 계속 살아있음** | `--reload` 모드 watch가 Windows NTFS에서 파일 변경을 감지 못함 + 기존 프로세스가 포트 점유 | `--reload` 제거 후 수동 재시작; `netstat -ano \| Select-String ":8000"` 으로 점유 PID 확인 |
+| **pipeline 다중 실행** | `pgrep` 미지원 환경에서 kill 실패 → 구 pipeline 좀비 유지 + 신규 재시작 중복 | `Get-WmiObject Win32_Process \| Where CommandLine -match pipeline`으로 PID 열거 후 `Stop-Process -Force` |
+| **SSE 연결이 계속 끊김** | `useEffect` 의존성 배열에 `lives` 포함 → lives 갱신 시마다 EventSource 재생성 + cleanup으로 기존 연결 종료 → `sseConnected` 스테일 클로저로 재연결 스킵 | REST 폴링으로 `live_home_prob` 공급 보완 (SSE 불안정 우회). SSE 의존성 배열 정리는 향후 개선 과제 |
+
+### 15.4 라이브 폴러 잡 ID 충돌 방지
 
 ```python
 # 마스터가 등록한 startup 잡 (DateTrigger T+0)
 livestart_{pk}  →  run start_live_poller()
-# start_live_poller가 등록하는 polling 잡 (IntervalTrigger 1분)
+# start_live_poller가 등록하는 polling 잡 (IntervalTrigger 30초)
 live_{pk}       →  run _live_poll_tick(pk)
 # Final 감지 후 등록되는 postgame 잡 (DateTrigger T+5min)
 post_{pk}       →  run run_postgame_sync(pk)
@@ -822,7 +904,7 @@ post_{pk}       →  run run_postgame_sync(pk)
 
 서로 다른 ID 접두사로 충돌 없음. `replace_existing=True` + `max_instances=1`로 중복 방지.
 
-### 15.4 다중 seed 학습 결과 (v2 final)
+### 15.5 다중 seed 학습 결과 (v2 final)
 
 | seed | LGBM | XGB | Cal+Ensemble |
 |---|---|---|---|
@@ -834,7 +916,7 @@ post_{pk}       →  run run_postgame_sync(pk)
 
 **8082경기 재학습 후 최종**: LGBM 0.5750 / XGB 0.5540 / **Cal 0.5640 ✅**
 
-### 15.5 다음 단계 권장 (향후 추가 향상)
+### 15.6 다음 단계 권장 (향후 추가 향상)
 
 | 방안 | 예상 효과 | 비용 |
 |---|---|---|
