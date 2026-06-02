@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href="https://github.com/kevin12579/SimMLB/blob/main/docs/intro.pdf" target="_blank">
-    <img src="https://img.shields.io/badge/PDF%20Presentation-프로젝트%20소개%20PPT%20보기-orange?style=for-the-badge&logo=adobeacrobatreader&logoColor=white" alt="SimMLB PPT"/>
+    <img src="https://img.shields.io/badge/PDF%20Presentation-프로젝트%20소개%20PPT%20보기-red?style=for-the-badge&logo=adobeacrobatreader&logoColor=white" alt="SimMLB PPT"/>
   </a>
 </p>
 
