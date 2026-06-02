@@ -1,8 +1,12 @@
 # ⚾ SimMLB — MLB 승부예측 AI 시스템 (v2.2)
 
+---
+
 <a href="https://github.com/kevin12579/SimMLB/blob/main/docs/intro.pdf" target="_blank">
   <img src="https://img.shields.io/badge/PDF%20Presentation-프로젝트%20소개%20PPT%20보기-orange?style=for-the-badge&logo=adobeacrobatreader&logoColor=white" alt="SimMLB PPT"/>
 </a>
+
+---
 
 MLB 정규시즌 경기의 **홈팀 승리 확률을 ML 모델로 예측**하고, GPT-4o-mini가 **한국어 분석 근거를 자동 생성**하며, 경기 진행 중 **SSE(Server-Sent Events)로 실시간 승률 변동을 push**하는 풀스택 AI 시스템.
 
